@@ -1,13 +1,11 @@
 """
-scorer.py
-종목 점수 시스템 + 스토캐스틱 지표
-PDF 리포트의 점수 컬럼 (0~150점) 재현
+scorer.py — 종목 점수 시스템 + 스토캐스틱
+기존 StockScanner._check_conditions() 결과(dict)를 받아 점수 계산
+최대 150점
 """
 
-import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 # ────────────────────────────────────────────────
@@ -16,74 +14,72 @@ from typing import Optional
 
 def calc_stochastic(df: pd.DataFrame, k: int = 14, d: int = 3) -> pd.DataFrame:
     """
-    Stochastic Oscillator (%K, %D) 계산
-    df 컬럼 필수: high, low, close
-    반환: df에 stoch_k, stoch_d 컬럼 추가
+    df 필수 컬럼: 고가, 저가, 종가  (pykrx OHLCV 컬럼명 그대로)
+    반환: stoch_k, stoch_d 컬럼 추가된 df
     """
-    low_min  = df["low"].rolling(window=k).min()
-    high_max = df["high"].rolling(window=k).max()
-
     df = df.copy()
-    df["stoch_k"] = 100 * (df["close"] - low_min) / (high_max - low_min + 1e-9)
+    low_min  = df["저가"].rolling(window=k).min()
+    high_max = df["고가"].rolling(window=k).max()
+    df["stoch_k"] = 100 * (df["종가"] - low_min) / (high_max - low_min + 1e-9)
     df["stoch_d"] = df["stoch_k"].rolling(window=d).mean()
     return df
 
 
-def stoch_signal(stoch_k: float, stoch_d: float) -> str:
-    """스토캐스틱 신호 문자열 반환 (PDF 표기 방식)"""
-    if stoch_k >= 80:
-        return "과매수"
-    elif stoch_k <= 20:
-        return "과매도"
-    elif stoch_k > stoch_d:
-        return "상승"
-    elif stoch_k < stoch_d:
-        return "하락"
-    else:
-        return "중립"
+def stoch_signal(k: float, d: float) -> str:
+    """스토캐스틱 신호 문자열 (PDF 표기용)"""
+    if k >= 80:             return "과매수"
+    if k <= 20:             return "과매도"
+    if k > d:               return "상승"
+    if k < d:               return "하락"
+    return                         "중립"
 
 
 # ────────────────────────────────────────────────
-# 점수 계산 로직
+# 점수 컨테이너
 # ────────────────────────────────────────────────
 
 @dataclass
 class StockScore:
-    """종목 종합 점수 컨테이너"""
     code: str
     name: str
 
-    # 세부 점수 (각 항목 최대치 합산 = 150점)
-    rsi_score:        int = 0   # 최대 20점
-    stoch_score:      int = 0   # 최대 20점
-    macd_score:       int = 0   # 최대 15점
-    foreign_score:    int = 0   # 최대 20점  (외인 수급)
-    institution_score: int = 0  # 최대 20점  (기관 수급)
-    news_score:       int = 0   # 최대 25점  (뉴스 감성)
-    theme_score:      int = 0   # 최대 10점  (테마 이슈 일치)
-    price_score:      int = 0   # 최대 20점  (가격 모멘텀)
+    # 세부 점수 (합계 최대 150)
+    rsi_score:         int = 0   # 20점
+    stoch_score:       int = 0   # 20점
+    macd_score:        int = 0   # 15점
+    foreign_score:     int = 0   # 20점
+    institution_score: int = 0   # 20점
+    news_score:        int = 0   # 25점
+    theme_score:       int = 0   # 10점
+    price_score:       int = 0   # 20점
 
-    # 지표 raw 값 (리포트 표시용)
+    # raw 지표값 (리포트 표시용)
     rsi:              float = 0.0
-    stoch_k_short:    float = 0.0   # 단기 스토캐스틱 K (5일)
+    stoch_k_short:    float = 0.0
     stoch_d_short:    float = 0.0
-    stoch_k_mid:      float = 0.0   # 중기 스토캐스틱 K (20일)
+    stoch_k_mid:      float = 0.0
     stoch_d_mid:      float = 0.0
-    foreign_10d:      float = 0.0   # 외인 10일 누적 (만주)
-    institution_10d:  float = 0.0   # 기관 10일 누적 (만주)
-    news_sentiment:   float = 0.0   # -1 ~ +1
+    foreign_10d:      float = 0.0   # 만주
+    institution_10d:  float = 0.0   # 만주
+    news_sentiment:   float = 0.0
+    close:            int   = 0
+    change_pct:       float = 0.0
+    volume_ratio:     float = 0.0
+    ma200_gap:        float = 0.0
+    divergence:       str   = "없음"
+    golden_cross:     bool  = False
+    hist_positive:    bool  = False
 
-    # 신호 문자열
     stoch_short_signal: str = "-"
     stoch_mid_signal:   str = "-"
 
+    sector: str = "기타"
+
     @property
     def total(self) -> int:
-        return (
-            self.rsi_score + self.stoch_score + self.macd_score
-            + self.foreign_score + self.institution_score
-            + self.news_score + self.theme_score + self.price_score
-        )
+        return (self.rsi_score + self.stoch_score + self.macd_score
+                + self.foreign_score + self.institution_score
+                + self.news_score + self.theme_score + self.price_score)
 
     def grade(self) -> str:
         t = self.total
@@ -91,180 +87,123 @@ class StockScore:
         if t >= 90:  return "★★  매수"
         if t >= 60:  return "★   관심"
         if t >= 30:  return "    중립"
-        return            "    회피"
+        return              "    회피"
 
 
 # ────────────────────────────────────────────────
-# 메인 채점 함수
+# 채점 함수
 # ────────────────────────────────────────────────
 
-def score_stock(
-    code: str,
-    name: str,
-    ohlcv: pd.DataFrame,          # columns: open high low close volume
-    foreign_series: pd.Series,    # 외인 일별 순매수 (주)
-    institution_series: pd.Series,# 기관 일별 순매수 (주)
-    news_sentiment: float = 0.0,  # -1 ~ +1
-    matched_themes: int = 0,      # 오늘 테마 이슈 매칭 수
+def score_from_scan(
+    scan_result: dict,          # StockScanner._check_conditions() 반환값
+    df_ohlcv: pd.DataFrame,     # pykrx OHLCV (고가/저가/종가 컬럼)
+    foreign_10d: float = 0.0,   # 외인 10일 순매수 (만주)
+    institution_10d: float = 0.0,
+    news_sentiment: float = 0.0,
+    matched_themes: int = 0,
+    sector: str = "기타",
 ) -> StockScore:
     """
-    종목 종합 점수 계산
-    ohlcv: 최소 60일 데이터 권장
+    기존 scan_result dict + OHLCV df → StockScore
+    scan_result 키: code, name, close, change_pct, volume_ratio,
+                    ma200_gap, rsi, rsi_status, divergence,
+                    golden_cross, hist_positive
     """
-    s = StockScore(code=code, name=name)
+    s = StockScore(
+        code=scan_result["code"],
+        name=scan_result["name"],
+        rsi=scan_result.get("rsi", 50.0),
+        close=scan_result.get("close", 0),
+        change_pct=scan_result.get("change_pct", 0.0),
+        volume_ratio=scan_result.get("volume_ratio", 0.0),
+        ma200_gap=scan_result.get("ma200_gap", 0.0),
+        divergence=scan_result.get("divergence", "없음"),
+        golden_cross=scan_result.get("golden_cross", False),
+        hist_positive=scan_result.get("hist_positive", False),
+        foreign_10d=foreign_10d,
+        institution_10d=institution_10d,
+        news_sentiment=news_sentiment,
+        sector=sector,
+    )
 
-    if len(ohlcv) < 20:
-        return s   # 데이터 부족
+    rsi = s.rsi
 
-    ohlcv = ohlcv.copy().reset_index(drop=True)
-    close = ohlcv["close"]
+    # ── 1. RSI (20점) ─────────────────────────
+    if 40 <= rsi <= 60:   s.rsi_score = 20
+    elif 30 <= rsi < 40 or 60 < rsi <= 70: s.rsi_score = 15
+    elif 20 <= rsi < 30:  s.rsi_score = 10
+    elif rsi > 80:        s.rsi_score = 5
+    else:                 s.rsi_score = 8
 
-    # ── 1. RSI (20점) ─────────────────────────────
-    rsi = _calc_rsi(close, 14)
-    s.rsi = rsi
-    if 40 <= rsi <= 60:
-        s.rsi_score = 20
-    elif 30 <= rsi < 40 or 60 < rsi <= 70:
-        s.rsi_score = 15
-    elif 20 <= rsi < 30:
-        s.rsi_score = 10   # 과매도 → 반등 기대
-    elif rsi > 80:
-        s.rsi_score = 5    # 과매수 → 위험
-    else:
-        s.rsi_score = 8
+    # 다이버전스 보너스
+    if s.divergence == "상승":
+        s.rsi_score = min(s.rsi_score + 5, 20)
 
-    # ── 2. 스토캐스틱 (20점) ─────────────────────
-    df_stoch = calc_stochastic(ohlcv, k=5, d=3)   # 단기
-    s.stoch_k_short = float(df_stoch["stoch_k"].iloc[-1])
-    s.stoch_d_short = float(df_stoch["stoch_d"].iloc[-1])
-    s.stoch_short_signal = stoch_signal(s.stoch_k_short, s.stoch_d_short)
+    # ── 2. 스토캐스틱 (20점) ─────────────────
+    if len(df_ohlcv) >= 10:
+        df_s = calc_stochastic(df_ohlcv, k=5, d=3)
+        s.stoch_k_short = float(df_s["stoch_k"].iloc[-1])
+        s.stoch_d_short = float(df_s["stoch_d"].iloc[-1])
+        s.stoch_short_signal = stoch_signal(s.stoch_k_short, s.stoch_d_short)
 
-    df_stoch_mid = calc_stochastic(ohlcv, k=20, d=5)  # 중기
-    s.stoch_k_mid = float(df_stoch_mid["stoch_k"].iloc[-1])
-    s.stoch_d_mid = float(df_stoch_mid["stoch_d"].iloc[-1])
-    s.stoch_mid_signal = stoch_signal(s.stoch_k_mid, s.stoch_d_mid)
+    if len(df_ohlcv) >= 25:
+        df_m = calc_stochastic(df_ohlcv, k=20, d=5)
+        s.stoch_k_mid = float(df_m["stoch_k"].iloc[-1])
+        s.stoch_d_mid = float(df_m["stoch_d"].iloc[-1])
+        s.stoch_mid_signal = stoch_signal(s.stoch_k_mid, s.stoch_d_mid)
 
-    # 단기 + 중기 모두 과매도 구간 골든크로스 → 최고점
-    stoch_stk = s.stoch_k_short
-    stoch_mtk = s.stoch_k_mid
-    if stoch_stk <= 20 and stoch_mtk <= 30:
-        s.stoch_score = 20
-    elif stoch_stk <= 30:
-        s.stoch_score = 15
-    elif 30 < stoch_stk <= 50 and stoch_stk > s.stoch_d_short:
-        s.stoch_score = 12
-    elif stoch_stk >= 80:
-        s.stoch_score = 3   # 과매수
-    else:
-        s.stoch_score = 8
+    sk = s.stoch_k_short
+    mk = s.stoch_k_mid
+    if sk <= 20 and mk <= 30:   s.stoch_score = 20
+    elif sk <= 30:              s.stoch_score = 15
+    elif 30 < sk <= 50 and sk > s.stoch_d_short: s.stoch_score = 12
+    elif sk >= 80:              s.stoch_score = 3
+    else:                       s.stoch_score = 8
 
-    # ── 3. MACD (15점) ────────────────────────────
-    macd_line, signal_line = _calc_macd(close)
-    macd_hist = macd_line - signal_line
-    if macd_hist > 0 and macd_line > 0:
-        s.macd_score = 15
-    elif macd_hist > 0:
-        s.macd_score = 10
-    elif macd_hist > -0.5:
-        s.macd_score = 5
-    else:
-        s.macd_score = 0
+    # ── 3. MACD (15점) ────────────────────────
+    if s.golden_cross and s.hist_positive: s.macd_score = 15
+    elif s.golden_cross:                   s.macd_score = 10
+    elif s.hist_positive:                  s.macd_score = 8
+    else:                                  s.macd_score = 0
 
-    # ── 4. 외인 수급 (20점) ───────────────────────
-    if len(foreign_series) >= 10:
-        f10 = foreign_series.iloc[-10:].sum()
-        s.foreign_10d = round(f10 / 10000, 1)   # 만주 단위
-        if f10 > 500_000:
-            s.foreign_score = 20
-        elif f10 > 100_000:
-            s.foreign_score = 15
-        elif f10 > 0:
-            s.foreign_score = 10
-        elif f10 > -100_000:
-            s.foreign_score = 5
-        else:
-            s.foreign_score = 0
+    # ── 4. 외인 수급 (20점) ───────────────────
+    f = foreign_10d
+    if f > 50:    s.foreign_score = 20
+    elif f > 10:  s.foreign_score = 15
+    elif f > 0:   s.foreign_score = 10
+    elif f > -10: s.foreign_score = 5
+    else:         s.foreign_score = 0
 
-    # ── 5. 기관 수급 (20점) ───────────────────────
-    if len(institution_series) >= 10:
-        i10 = institution_series.iloc[-10:].sum()
-        s.institution_10d = round(i10 / 10000, 1)
-        if i10 > 500_000:
-            s.institution_score = 20
-        elif i10 > 100_000:
-            s.institution_score = 15
-        elif i10 > 0:
-            s.institution_score = 10
-        elif i10 > -100_000:
-            s.institution_score = 5
-        else:
-            s.institution_score = 0
+    # ── 5. 기관 수급 (20점) ───────────────────
+    i = institution_10d
+    if i > 50:    s.institution_score = 20
+    elif i > 10:  s.institution_score = 15
+    elif i > 0:   s.institution_score = 10
+    elif i > -10: s.institution_score = 5
+    else:         s.institution_score = 0
 
-    # ── 6. 뉴스 감성 (25점) ───────────────────────
-    s.news_sentiment = news_sentiment
-    if news_sentiment >= 0.6:
-        s.news_score = 25
-    elif news_sentiment >= 0.3:
-        s.news_score = 18
-    elif news_sentiment >= 0.0:
-        s.news_score = 10
-    elif news_sentiment >= -0.3:
-        s.news_score = 5
-    else:
-        s.news_score = 0
+    # ── 6. 뉴스 감성 (25점) ───────────────────
+    ns = news_sentiment
+    if ns >= 0.6:   s.news_score = 25
+    elif ns >= 0.3: s.news_score = 18
+    elif ns >= 0.0: s.news_score = 10
+    elif ns >= -0.3:s.news_score = 5
+    else:           s.news_score = 0
 
-    # ── 7. 테마 이슈 (10점) ───────────────────────
+    # ── 7. 테마 이슈 (10점) ───────────────────
     s.theme_score = min(matched_themes * 5, 10)
 
-    # ── 8. 가격 모멘텀 (20점) ────────────────────
-    if len(close) >= 20:
-        ret_5d  = (close.iloc[-1] / close.iloc[-6]  - 1) * 100
-        ret_20d = (close.iloc[-1] / close.iloc[-21] - 1) * 100
-        mom = ret_5d * 0.4 + ret_20d * 0.6
-        if mom >= 5:
-            s.price_score = 20
-        elif mom >= 2:
-            s.price_score = 15
-        elif mom >= 0:
-            s.price_score = 10
-        elif mom >= -2:
-            s.price_score = 5
-        else:
-            s.price_score = 0
+    # ── 8. 가격 모멘텀 (20점) ─────────────────
+    # 기존 필터 통과 = 거래량 2배 + 2% 상승 → 기본 점수 보장
+    chg = s.change_pct
+    vr  = s.volume_ratio
+    if chg >= 5 and vr >= 3:    s.price_score = 20
+    elif chg >= 3 and vr >= 2:  s.price_score = 15
+    elif chg >= 2:              s.price_score = 10
+    else:                       s.price_score = 5
 
     return s
 
 
-# ────────────────────────────────────────────────
-# 내부 보조 함수
-# ────────────────────────────────────────────────
-
-def _calc_rsi(close: pd.Series, period: int = 14) -> float:
-    delta = close.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / (loss + 1e-9)
-    rsi = 100 - (100 / (1 + rs))
-    return float(rsi.iloc[-1]) if not rsi.isna().all() else 50.0
-
-
-def _calc_macd(
-    close: pd.Series,
-    fast: int = 12,
-    slow: int = 26,
-    signal: int = 9,
-) -> tuple[pd.Series, pd.Series]:
-    ema_fast   = close.ewm(span=fast, adjust=False).mean()
-    ema_slow   = close.ewm(span=slow, adjust=False).mean()
-    macd_line  = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    return macd_line, signal_line
-
-
-# ────────────────────────────────────────────────
-# 편의 함수: 리스트 일괄 채점 후 정렬
-# ────────────────────────────────────────────────
-
-def rank_stocks(scores: list[StockScore]) -> list[StockScore]:
-    """점수 내림차순 정렬"""
+def rank_scores(scores: list[StockScore]) -> list[StockScore]:
     return sorted(scores, key=lambda s: s.total, reverse=True)
