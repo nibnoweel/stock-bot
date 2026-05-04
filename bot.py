@@ -16,6 +16,13 @@ from report_generator import generate_report
 from sector_theme import classify_news_to_themes, count_hot_keywords
 from config import TELEGRAM_TOKEN, CHAT_ID, WEEKDAY_SCAN_TIMES, WEEKEND_SCAN_TIMES
 
+# 모든 로그의 기본 레벨은 INFO로 두되,
+logging.basicConfig(level=logging.INFO)
+
+# httpx(텔레그램 통신 라이브러리)의 로그만 WARNING 등급으로 높여서
+# 200 OK 같은 일반 정보는 안 찍히게 만듭니다.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
