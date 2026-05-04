@@ -1,17 +1,8 @@
-FROM python:3.11-slim
- 
-# 한글 폰트만 설치 (apt 캐시 즉시 삭제)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    fonts-nanum \
-    && rm -rf /var/lib/apt/lists/*
- 
-WORKDIR /app
- 
-# requirements 먼저 복사 (레이어 캐시 활용)
-COPY requirements.txt .
-RUN pip install --no-cache-dir setuptools \
-    && pip install --no-cache-dir -r requirements.txt
- 
-COPY . .
- 
-CMD ["python", "bot.py"]
+python-telegram-bot==20.7
+finance-datareader>=0.9.50
+pandas==2.2.2
+APScheduler==3.10.4
+setuptools>=68.0.0
+feedparser==6.0.11
+reportlab==4.2.0
+requests>=2.31.0

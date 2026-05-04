@@ -1,25 +1,20 @@
 """
-scanner.py (업그레이드)
-기존 StockScanner 완전 유지 + 스토캐스틱/점수/수급 통합
+scanner.py
+pykrx → FinanceDataReader 전환
+OHLCV 컬럼: Open, High, Low, Close, Volume (영문 대문자)
 """
 
 import logging
-import logging.handlers
 from datetime import datetime, timedelta
 
 import pandas as pd
-from pykrx import stock
+import FinanceDataReader as fdr
 
 from scorer import StockScore, score_from_scan, rank_scores
 from supply_scanner import fetch_investor_data
 from sector_theme import get_sector, match_stock_themes, ThemeIssue
 
 logger = logging.getLogger(__name__)
-
-logging.getLogger("pykrx").setLevel(logging.ERROR)
-root_logger = logging.getLogger("root")
-if not any(isinstance(h, logging.NullHandler) for h in root_logger.handlers):
-    root_logger.addHandler(logging.NullHandler())
 
 
 class StockScanner:
@@ -59,18 +54,60 @@ class StockScanner:
                 return d.strftime("%Y%m%d")
         return (now - timedelta(days=1)).strftime("%Y%m%d")
 
-    def _date_n_days_ago(self, n: int) -> str:
-        return (datetime.now() - timedelta(days=n)).strftime("%Y%m%d")
-
-    # ── OHLCV (기존 유지) ─────────────────────────
+    # ── OHLCV — FDR 전환 ─────────────────────────
     def _get_ohlcv(self, code: str, end_date: str, days: int = 300) -> pd.DataFrame:
-        start = (datetime.strptime(end_date, "%Y%m%d") - timedelta(days=days + 60)).strftime("%Y%m%d")
-        return stock.get_market_ohlcv_by_date(start, end_date, code)
+        """
+        FDR DataReader → 컬럼 Open/High/Low/Close/Volume
+        pykrx 호환을 위해 한글 컬럼명으로 rename
+        """
+        end_dt   = datetime.strptime(end_date, "%Y%m%d")
+        start_dt = end_dt - timedelta(days=days + 60)
+        df = fdr.DataReader(
+            code,
+            start_dt.strftime("%Y-%m-%d"),
+            end_dt.strftime("%Y-%m-%d"),
+        )
+        if df is None or df.empty:
+            return pd.DataFrame()
 
-    # ── 캔들 / RSI / MACD (기존 완전 유지) ──────────
+        # FDR 컬럼 → 기존 pykrx 컬럼명으로 rename (내부 로직 재사용)
+        rename_map = {
+            "Open":   "시가",
+            "High":   "고가",
+            "Low":    "저가",
+            "Close":  "종가",
+            "Volume": "거래량",
+        }
+        df = df.rename(columns=rename_map)
+
+        # 필요 컬럼만 추출
+        needed = ["시가", "고가", "저가", "종가", "거래량"]
+        missing = [c for c in needed if c not in df.columns]
+        if missing:
+            logger.debug("%s 컬럼 누락: %s", code, missing)
+            return pd.DataFrame()
+
+        return df[needed].dropna()
+
+    # ── 전 종목 티커 — FDR 전환 ──────────────────
+    def _get_all_tickers(self, trading_day: str) -> list[tuple[str, str]]:
+        """FDR StockListing으로 KOSPI + KOSDAQ 전 종목"""
+        tickers = []
+        for market in self.markets:
+            try:
+                df = fdr.StockListing(market)
+                df["Code"] = df["Code"].astype(str).str.zfill(6)
+                for _, row in df.iterrows():
+                    tickers.append((str(row["Code"]), str(row["Name"])))
+            except Exception as e:
+                logger.warning("%s 티커 로딩 실패: %s", market, e)
+        logger.info("전 종목 로드: %d개", len(tickers))
+        return tickers
+
+    # ── 캔들 / RSI / MACD (기존 로직 완전 유지) ──
     @staticmethod
     def _candle_parts(row):
-        open_ = row["시가"]; high = row["고가"]
+        open_ = row["시가"]; high  = row["고가"]
         low   = row["저가"]; close = row["종가"]
         body_top = max(open_, close); body_bot = min(open_, close)
         return high - body_top, body_top - body_bot, body_bot - low
@@ -92,22 +129,20 @@ class StockScanner:
         if current_rsi < 30:
             lows = recent["저가"].values; rsi_vals = recent_rsi.values
             for i in range(len(lows) - 5, 0, -1):
-                if lows[-1] < lows[i]:
-                    rsi_diff = rsi_vals[-1] - rsi_vals[i]
-                    if 5 <= rsi_diff <= 10: return "상승"
+                if lows[-1] < lows[i] and 5 <= rsi_vals[-1] - rsi_vals[i] <= 10:
+                    return "상승"
         if current_rsi > 70:
             highs = recent["고가"].values; rsi_vals = recent_rsi.values
             for i in range(len(highs) - 5, 0, -1):
-                if highs[-1] > highs[i]:
-                    rsi_diff = rsi_vals[i] - rsi_vals[-1]
-                    if 5 <= rsi_diff <= 10: return "하락"
+                if highs[-1] > highs[i] and 5 <= rsi_vals[i] - rsi_vals[-1] <= 10:
+                    return "하락"
         return "없음"
 
     @staticmethod
     def _calc_macd(closes):
-        ema12 = closes.ewm(span=12, adjust=False).mean()
-        ema26 = closes.ewm(span=26, adjust=False).mean()
-        macd  = ema12 - ema26
+        ema12  = closes.ewm(span=12, adjust=False).mean()
+        ema26  = closes.ewm(span=26, adjust=False).mean()
+        macd   = ema12 - ema26
         signal = macd.ewm(span=9, adjust=False).mean()
         return macd, signal, macd - signal
 
@@ -119,11 +154,11 @@ class StockScanner:
                 return True
         return False
 
-    # ── 조건 검사 (기존 완전 유지) ───────────────────
+    # ── 조건 검사 (기존 로직 완전 유지) ─────────
     def _check_conditions(self, code, name, end_date):
         try:
             df = self._get_ohlcv(code, end_date, days=300)
-            if len(df) < 202: return None
+            if df is None or len(df) < 202: return None
 
             today = df.iloc[-1]; yesterday = df.iloc[-2]
             if yesterday["거래량"] == 0: return None
@@ -165,42 +200,40 @@ class StockScanner:
                 "upper_tail": int(upper_tail), "body": int(body), "lower_tail": int(lower_tail),
                 "rsi": current_rsi, "rsi_status": rsi_status, "divergence": divergence,
                 "golden_cross": golden_cross, "hist_positive": hist_positive,
-                "_df": df,   # 스토캐스틱용 내부 전달 (리포트에는 미출력)
+                "_df": df,
             }
         except Exception as e:
-            logger.debug("%s 조건 검사 오류: %s", code, str(e))
+            logger.debug("%s 조건 검사 오류: %s", code, e)
             return None
 
-    def _get_all_tickers(self, trading_day):
-        tickers = []
-        for market in self.markets:
-            try:
-                codes = stock.get_market_ticker_list(date=trading_day, market=market)
-                for code in codes:
-                    try:
-                        name = stock.get_market_ticker_name(code)
-                        tickers.append((code, name))
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.warning("%s 티커 로딩 실패: %s", market, str(e))
-        return tickers
-
-    # ── 기존 scan() — 하위 호환 유지 ─────────────────
+    # ── 기존 scan() 유지 ─────────────────────────
     def scan(self) -> list:
-        """기존 인터페이스 유지 (bot.py 호환)"""
-        return self._scan_base()
+        if self._is_maintenance_time():
+            logger.warning("KRX 서버 점검 시간 (00:00~06:00) — 스캔 불가")
+            return []
+        trading_day = self._latest_trading_day()
+        tickers     = self._get_all_tickers(trading_day)
+        logger.info("총 %d개 종목 스캔 시작 (기준일: %s)", len(tickers), trading_day)
 
-    # ── 새 scan_with_score() — 점수 포함 ─────────────
+        results = []
+        for i, (code, name) in enumerate(tickers):
+            if i % 100 == 0:
+                logger.info("... %d / %d", i, len(tickers))
+            result = self._check_conditions(code, name, trading_day)
+            if result:
+                result.pop("_df", None)
+                results.append(result)
+                logger.info("조건 만족: %s (%s)", name, code)
+
+        logger.info("스캔 완료 - %d개 종목 발견", len(results))
+        return results
+
+    # ── 신규 scan_with_score() ───────────────────
     def scan_with_score(
         self,
         themes: list[ThemeIssue],
         news_sentiment_map: dict[str, float],
     ) -> list[StockScore]:
-        """
-        기존 스캔 결과 + 점수/수급/테마 통합
-        bot.py에서 선택적으로 호출 가능
-        """
         if self._is_maintenance_time():
             logger.warning("KRX 서버 점검 시간 — 스캔 불가")
             return []
@@ -217,12 +250,8 @@ class StockScanner:
             if not result:
                 continue
 
-            df_ohlcv = result.pop("_df")   # 내부 df 분리
-
-            # 수급
-            supply = fetch_investor_data(code, days=10)
-
-            # 점수 계산
+            df_ohlcv = result.pop("_df")
+            supply   = fetch_investor_data(code, days=10)
             s = score_from_scan(
                 scan_result=result,
                 df_ohlcv=df_ohlcv,
@@ -237,26 +266,3 @@ class StockScanner:
 
         logger.info("점수 스캔 완료: %d종목", len(scores))
         return rank_scores(scores)
-
-    def _scan_base(self) -> list:
-        """기존 scan() 내부 구현"""
-        if self._is_maintenance_time():
-            logger.warning("KRX 서버 점검 시간 (00:00~06:00) — 스캔 불가")
-            return []
-
-        trading_day = self._latest_trading_day()
-        tickers     = self._get_all_tickers(trading_day)
-        logger.info("총 %d개 종목 스캔 시작 (기준일: %s)", len(tickers), trading_day)
-
-        results = []
-        for i, (code, name) in enumerate(tickers):
-            if i % 100 == 0:
-                logger.info("... %d / %d", i, len(tickers))
-            result = self._check_conditions(code, name, trading_day)
-            if result:
-                result.pop("_df", None)   # 외부 반환 시 df 제거
-                results.append(result)
-                logger.info("조건 만족: %s (%s)", name, code)
-
-        logger.info("스캔 완료 - %d개 종목 발견", len(results))
-        return results
