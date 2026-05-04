@@ -1,0 +1,247 @@
+"""
+KRX 주식 스캐너 텔레그램 봇
+- 평일: 08:30 / 12:30 / 16:00 자동 스캔
+- 주말·공휴일: 08:30 / 20:00 자동 스캔
+"""
+
+import logging
+from datetime import datetime
+from telegram import Bot
+from telegram.ext import Application, CommandHandler, ContextTypes
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from scanner import StockScanner
+from news_scanner import NewsScanner
+from report_generator import generate_report
+from config import TELEGRAM_TOKEN, CHAT_ID, WEEKDAY_SCAN_TIMES, WEEKEND_SCAN_TIMES
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+scanner = StockScanner()
+news_scanner = NewsScanner()
+
+
+# ────────────────────────────────────────────
+# 공휴일 체크 (KRX 데이터로 판단)
+# ────────────────────────────────────────────
+def _is_trading_day() -> bool:
+    """오늘이 거래일인지 확인 (공휴일 목록 기반)"""
+    return not scanner._is_holiday(datetime.now())
+
+
+# ────────────────────────────────────────────
+# 통합 스캔 + PDF 전송
+# ────────────────────────────────────────────
+async def run_full_scan(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = None):
+    _bot = bot or (context.bot if context else None)
+    if not _bot:
+        return
+
+    is_trading = _is_trading_day()
+    logger.info("스캔 시작 (거래일: %s)", is_trading)
+
+    # KRX 서버 점검 시간 안내
+    from datetime import datetime as _dt
+    hour = _dt.now().hour
+    if hour < 6:
+        await _bot.send_message(
+            chat_id=CHAT_ID,
+            text="⚠️ 현재 KRX 서버 점검 시간(00:00~06:00)입니다.\n오전 6시 이후에 다시 시도해주세요.",
+            parse_mode="Markdown"
+        )
+        return
+
+    try:
+        # 1. 주식 스캔
+        trading_day = scanner._latest_trading_day()
+        stock_results = scanner.scan()
+        logger.info("주식 스캔 완료: %d종목", len(stock_results))
+
+        # 2. 뉴스 스캔
+        positive_news, negative_news = news_scanner.scan()
+        logger.info("뉴스 스캔 완료: 긍정 %d, 부정 %d", len(positive_news), len(negative_news))
+
+        # 3. PDF 생성
+        pdf_path = generate_report(
+            stock_results=stock_results,
+            positive_news=positive_news,
+            negative_news=negative_news,
+            trading_day=trading_day,
+        )
+
+        # 4. 요약 메시지
+        d = datetime.strptime(trading_day, "%Y%m%d")
+        now = datetime.now()
+        time_label = now.strftime("%H:%M")
+
+        today = datetime.now()
+        trading_day_date = datetime.strptime(trading_day, "%Y%m%d").date()
+        is_today = trading_day_date == today.date()
+
+        if is_today:
+            day_label = f"📅 {d.strftime('%Y-%m-%d')} (오늘)"
+        elif today.weekday() >= 5:
+            day_label = f"📅 {d.strftime('%Y-%m-%d')} 기준 _(오늘은 주말 휴장)_"
+        else:
+            day_label = f"📅 {d.strftime('%Y-%m-%d')} 기준 _(오늘은 공휴일 휴장)_"
+
+        summary = (
+            f"📋 *KRX 스캔 리포트* — {time_label}\n"
+            f"{day_label}\n\n"
+            f"📊 주식 조건 만족: *{len(stock_results)}종목*\n"
+            f"🟢 긍정 뉴스 이슈: *{len(positive_news)}종목*\n"
+            f"🔴 부정 뉴스 이슈: *{len(negative_news)}종목*\n\n"
+            f"아래 PDF 파일을 확인하세요 👇"
+        )
+        await _bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="Markdown")
+
+        # 5. PDF 전송
+        date_str = now.strftime("%Y%m%d_%H%M")
+        filename = f"KRX_리포트_{date_str}.pdf"
+        with open(pdf_path, "rb") as f:
+            await _bot.send_document(
+                chat_id=CHAT_ID,
+                document=f,
+                filename=filename,
+                caption=f"📄 KRX 스캔 리포트 ({now.strftime('%Y-%m-%d %H:%M')})"
+            )
+        logger.info("PDF 전송 완료")
+
+    except Exception as e:
+        logger.error("스캔 오류: %s", str(e))
+        await _bot.send_message(chat_id=CHAT_ID, text="⚠️ 스캔 중 오류 발생: " + str(e))
+
+
+# ────────────────────────────────────────────
+# 스케줄 실행 (평일/주말 분기)
+# ────────────────────────────────────────────
+async def scheduled_weekday_scan(bot: Bot = None):
+    """평일 전용 스캔 — 거래일 아닌 경우 스킵"""
+    if not _is_trading_day():
+        logger.info("평일 스캔 스킵 (공휴일)")
+        return
+    await run_full_scan(bot=bot)
+
+
+async def scheduled_weekend_scan(bot: Bot = None):
+    """주말/공휴일 전용 스캔 — 거래일이면 스킵"""
+    if _is_trading_day():
+        logger.info("주말 스캔 스킵 (거래일)")
+        return
+    await run_full_scan(bot=bot)
+
+
+# ────────────────────────────────────────────
+# 명령어 핸들러
+# ────────────────────────────────────────────
+async def cmd_scan(update, context: ContextTypes.DEFAULT_TYPE):
+    """/scan — 즉시 전체 스캔"""
+    await update.message.reply_text(
+        "🔍 스캔을 시작합니다!\n"
+        "주식 조건 스캔 → 뉴스 이슈 스캔 → PDF 리포트 생성\n"
+        "⏳ 10~20분 정도 소요됩니다."
+    )
+    await run_full_scan(bot=context.bot)
+
+
+async def cmd_start(update, context: ContextTypes.DEFAULT_TYPE):
+    is_trading = _is_trading_day()
+    status = "📈 오늘은 거래일입니다." if is_trading else "💤 오늘은 휴장일입니다."
+    text = (
+        f"👋 *KRX 주식 스캐너 봇*\n\n"
+        f"{status}\n\n"
+        "⏰ *자동 스캔 스케줄:*\n"
+        f"평일 (거래일): {' / '.join(WEEKDAY_SCAN_TIMES)}\n"
+        f"주말·공휴일: {' / '.join(WEEKEND_SCAN_TIMES)}\n\n"
+        "📌 *명령어:*\n"
+        "/scan — 즉시 전체 스캔 + PDF\n"
+        "/status — 봇 상태\n"
+        "/help — 도움말"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def cmd_status(update, context: ContextTypes.DEFAULT_TYPE):
+    trading_day = scanner._latest_trading_day()
+    d = datetime.strptime(trading_day, "%Y%m%d")
+    is_trading = _is_trading_day()
+    status = "📈 거래일" if is_trading else "💤 휴장일"
+    await update.message.reply_text(
+        f"✅ 봇 정상 작동 중\n"
+        f"📅 오늘 상태: {status}\n"
+        f"📅 최근 거래일: {d.strftime('%Y-%m-%d')}\n\n"
+        f"⏰ 평일 스캔: {' / '.join(WEEKDAY_SCAN_TIMES)}\n"
+        f"⏰ 주말 스캔: {' / '.join(WEEKEND_SCAN_TIMES)}",
+        parse_mode="Markdown"
+    )
+
+
+async def cmd_help(update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📖 *도움말*\n\n"
+        "/scan — 즉시 전체 스캔 + PDF 리포트\n"
+        "/status — 봇 상태 및 스케줄 확인\n"
+        "/help — 이 메시지",
+        parse_mode="Markdown"
+    )
+
+
+# ────────────────────────────────────────────
+# 메인
+# ────────────────────────────────────────────
+def main():
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("scan", cmd_scan))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("help", cmd_help))
+
+    scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
+
+    # 평일 스캔 등록 (월~금)
+    for time_str in WEEKDAY_SCAN_TIMES:
+        hour, minute = map(int, time_str.split(":"))
+        scheduler.add_job(
+            scheduled_weekday_scan,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour=hour,
+            minute=minute,
+            kwargs={"bot": app.bot}
+        )
+        logger.info("평일 스캔 등록: %s (월~금)", time_str)
+
+    # 주말 스캔 등록 (토~일) + 공휴일은 함수 내에서 처리
+    for time_str in WEEKEND_SCAN_TIMES:
+        hour, minute = map(int, time_str.split(":"))
+        # 토·일 등록
+        scheduler.add_job(
+            scheduled_weekend_scan,
+            trigger="cron",
+            day_of_week="sat,sun",
+            hour=hour,
+            minute=minute,
+            kwargs={"bot": app.bot}
+        )
+        # 평일 공휴일도 커버 (평일 스캔이 스킵되면 이쪽이 처리)
+        scheduler.add_job(
+            scheduled_weekend_scan,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour=hour,
+            minute=minute,
+            kwargs={"bot": app.bot}
+        )
+        logger.info("주말 스캔 등록: %s", time_str)
+
+    scheduler.start()
+    logger.info("봇 시작")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
