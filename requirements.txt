@@ -1,7 +1,8 @@
-python-telegram-bot==20.7
-FinanceDataReader
-pandas==2.2.2
+python-telegram-bot --upgrade
+finance-datareader
+pandas
 APScheduler==3.10.4
 setuptools>=68.0.0
 feedparser==6.0.11
 reportlab==4.2.0
+requests
