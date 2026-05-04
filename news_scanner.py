@@ -13,6 +13,7 @@ RSS_SOURCES = [
     ("머니투데이", "https://rss.mt.co.kr/mt_news_top.xml"),
     ("이데일리", "https://rss.edaily.co.kr/edaily_stocknews.xml"),
     ("서울경제", "https://www.sedaily.com/rss/Stock"),
+    ("네이버증권", "https://finance.naver.com/news/mainnews.naver") 
 ]
 
 POSITIVE_KEYWORDS = [

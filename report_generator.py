@@ -1,354 +1,430 @@
 """
-PDF 리포트 생성기
-SECTION 1: 기술적 스캔
-SECTION 2: 뉴스 이슈 (긍정/부정)
-SECTION 3: 오늘의 종목 (기술적 + 긍정뉴스 교집합, 부정뉴스 제외)
+report_generator.py  (업그레이드 버전)
+PDF 이슈 리포트 생성 — 참고 PDF 레이아웃 재현
+섹션:
+  1. 오늘의 매크로 이슈 (테마별)
+  2. 핫 키워드 TOP 8
+  3. 텔레그램 채널 인텔리전스 (목표주가)
+  4. 대통령/정부 정책 동향 (섹터별)
+  5. 정책 관전 종목 (종목 카드: 외인/기관/RSI/스토캐스틱/점수)
 """
 
 import os
-import logging
+import io
 from datetime import datetime
+from typing import Optional
+
 from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
 from reportlab.lib.units import mm
-from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    HRFlowable, PageBreak, KeepTogether
 )
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-logger = logging.getLogger(__name__)
+from scorer import StockScore
+from sector_theme import ThemeIssue, count_hot_keywords
 
-FONT_DIR     = "/usr/share/fonts/truetype/nanum"
-FONT_REGULAR = os.path.join(FONT_DIR, "NanumGothic.ttf")
-FONT_BOLD    = os.path.join(FONT_DIR, "NanumGothicBold.ttf")
+# ── 한글 폰트 등록 ──────────────────────────────
+_FONT_PATHS = [
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+    "/app/fonts/NanumGothic.ttf",
+    "./fonts/NanumGothic.ttf",
+]
 
-COLOR_PRIMARY  = colors.HexColor("#1A237E")
-COLOR_POSITIVE = colors.HexColor("#1B5E20")
-COLOR_NEGATIVE = colors.HexColor("#B71C1C")
-COLOR_GOLD     = colors.HexColor("#E65100")
-COLOR_ACCENT   = colors.HexColor("#E3F2FD")
-COLOR_POS_BG   = colors.HexColor("#E8F5E9")
-COLOR_NEG_BG   = colors.HexColor("#FFEBEE")
-COLOR_GOLD_BG  = colors.HexColor("#FFF8E1")
-COLOR_GRAY     = colors.HexColor("#607D8B")
-COLOR_DIVIDER  = colors.HexColor("#CFD8DC")
+def _register_fonts():
+    for path in _FONT_PATHS:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont("NanumGothic", path))
+                pdfmetrics.registerFont(TTFont("NanumGothicBold", path.replace("Gothic", "GothicBold")))
+                return "NanumGothic", "NanumGothicBold"
+            except Exception:
+                pass
+    # 폴백: 기본 폰트
+    return "Helvetica", "Helvetica-Bold"
+
+FONT_REGULAR, FONT_BOLD = _register_fonts()
+
+# ── 색상 팔레트 ──────────────────────────────────
+C_ORANGE  = colors.HexColor("#E8530A")   # 헤더/강조 (상승)
+C_BLUE    = colors.HexColor("#1A6FB5")   # 파랑 (섹터/수급 양)
+C_RED     = colors.HexColor("#D42B2B")   # 빨강 (하락/손실)
+C_GRAY    = colors.HexColor("#555555")
+C_LIGHT   = colors.HexColor("#F5F5F5")
+C_WHITE   = colors.white
+C_BLACK   = colors.black
+C_BORDER  = colors.HexColor("#DDDDDD")
+C_HEADER_BG = colors.HexColor("#FFF3ED")
+C_CARD_BG   = colors.HexColor("#FAFAFA")
+
+W, H = A4  # 595 × 842 pt
 
 
-def register_fonts():
-    try:
-        pdfmetrics.registerFont(TTFont("NanumGothic", FONT_REGULAR))
-        pdfmetrics.registerFont(TTFont("NanumGothicBold", FONT_BOLD))
-        return True
-    except Exception as e:
-        logger.warning("나눔폰트 로드 실패: %s", str(e))
-        return False
+# ────────────────────────────────────────────────
+# 스타일 정의
+# ────────────────────────────────────────────────
 
-
-def get_styles(has_font):
-    f  = "NanumGothic"     if has_font else "Helvetica"
-    fb = "NanumGothicBold" if has_font else "Helvetica-Bold"
+def _styles():
+    base = getSampleStyleSheet()
+    def S(name, parent="Normal", **kw):
+        return ParagraphStyle(name, parent=base[parent],
+                              fontName=kw.pop("fontName", FONT_REGULAR), **kw)
     return {
-        "title":      ParagraphStyle("title",      fontName=fb, fontSize=22, textColor=COLOR_PRIMARY, spaceAfter=4, leading=28),
-        "subtitle":   ParagraphStyle("subtitle",   fontName=f,  fontSize=10, textColor=COLOR_GRAY, spaceAfter=2),
-        "section":    ParagraphStyle("section",    fontName=fb, fontSize=13, textColor=colors.white, spaceAfter=4, leading=18),
-        "stock_name": ParagraphStyle("stock_name", fontName=fb, fontSize=11, textColor=COLOR_PRIMARY, spaceAfter=1),
-        "gold_name":  ParagraphStyle("gold_name",  fontName=fb, fontSize=11, textColor=COLOR_GOLD, spaceAfter=1),
-        "body":       ParagraphStyle("body",       fontName=f,  fontSize=9,  textColor=colors.HexColor("#333"), spaceAfter=2, leading=13),
-        "indicator":  ParagraphStyle("indicator",  fontName=f,  fontSize=8,  textColor=COLOR_GRAY, spaceAfter=1, leading=12),
-        "kw_pos":     ParagraphStyle("kw_pos",     fontName=fb, fontSize=9,  textColor=COLOR_POSITIVE),
-        "kw_neg":     ParagraphStyle("kw_neg",     fontName=fb, fontSize=9,  textColor=COLOR_NEGATIVE),
-        "news_item":  ParagraphStyle("news_item",  fontName=f,  fontSize=8,  textColor=COLOR_GRAY, spaceAfter=1, leading=11),
-        "footer":     ParagraphStyle("footer",     fontName=f,  fontSize=8,  textColor=COLOR_GRAY, alignment=1),
+        "title":    S("title",    fontSize=16, fontName=FONT_BOLD,    textColor=C_ORANGE, spaceAfter=4),
+        "subtitle": S("subtitle", fontSize=10, textColor=C_GRAY,      spaceAfter=8),
+        "section":  S("section",  fontSize=13, fontName=FONT_BOLD,    textColor=C_BLACK,  spaceBefore=10, spaceAfter=4),
+        "theme_h":  S("theme_h",  fontSize=11, fontName=FONT_BOLD,    textColor=C_BLACK),
+        "theme_s":  S("theme_s",  fontSize=9,  textColor=C_GRAY),
+        "kw_lbl":   S("kw_lbl",   fontSize=8,  textColor=C_BLUE,      fontName=FONT_BOLD),
+        "body":     S("body",     fontSize=9,  textColor=C_GRAY,      spaceAfter=2),
+        "stock_n":  S("stock_n",  fontSize=9,  fontName=FONT_BOLD,    textColor=C_ORANGE),
+        "score_hi": S("score_hi", fontSize=9,  fontName=FONT_BOLD,    textColor=C_ORANGE),
+        "score_lo": S("score_lo", fontSize=9,  fontName=FONT_BOLD,    textColor=C_GRAY),
+        "cell":     S("cell",     fontSize=8,  textColor=C_GRAY),
+        "cell_b":   S("cell_b",   fontSize=8,  fontName=FONT_BOLD,    textColor=C_BLACK),
+        "supply_p": S("supply_p", fontSize=8,  textColor=C_BLUE),
+        "supply_n": S("supply_n", fontSize=8,  textColor=C_RED),
     }
 
 
-def section_header(text, bg_color, styles):
-    tbl = Table([[Paragraph(text, styles["section"])]], colWidths=[170*mm])
-    tbl.setStyle(TableStyle([
-        ("BACKGROUND",   (0,0), (-1,-1), bg_color),
-        ("TOPPADDING",   (0,0), (-1,-1), 8),
-        ("BOTTOMPADDING",(0,0), (-1,-1), 8),
-        ("LEFTPADDING",  (0,0), (-1,-1), 12),
-    ]))
-    return tbl
+# ────────────────────────────────────────────────
+# 공통 유틸
+# ────────────────────────────────────────────────
+
+def _hr(width=None, color=C_BORDER, thickness=0.5):
+    return HRFlowable(width=width or "100%", thickness=thickness,
+                      color=color, spaceAfter=4, spaceBefore=4)
 
 
-# ────────────────────────────────────────────
-# RSI / MACD 참고 지표 텍스트 생성
-# ────────────────────────────────────────────
-def indicator_text(r: dict) -> str:
-    # RSI
-    rsi_val    = r.get("rsi", "-")
-    rsi_status = r.get("rsi_status", "")
-    divergence = r.get("divergence", "없음")
-
-    if divergence == "상승":
-        div_str = "🔺 상승다이버전스 (저점↓ RSI저점↑)"
-    elif divergence == "하락":
-        div_str = "🔻 하락다이버전스 (고점↑ RSI고점↓)"
-    else:
-        div_str = "— 다이버전스 없음"
-
-    rsi_str = f"RSI {rsi_val} ({rsi_status})  {div_str}"
-
-    # MACD
-    gc   = "골든크로스 ✅" if r.get("golden_cross") else "골든크로스 없음"
-    hist = "히스토그램 양전환 ✅" if r.get("hist_positive") else ""
-    macd_str = f"MACD {gc}" + (f"  |  {hist}" if hist else "")
-
-    return rsi_str + "\n" + macd_str
+def _supply_fmt(val: float) -> tuple[str, str]:
+    """수급 만주 → (표시문자열, 색상키)"""
+    sign = "+" if val >= 0 else ""
+    arrow = "🔥" if val >= 50 else ("▲" if val > 0 else ("▼" if val < -50 else "•"))
+    return f"{sign}{val:.1f}만{arrow}", ("supply_p" if val >= 0 else "supply_n")
 
 
-# ────────────────────────────────────────────
-# SECTION 1: 기술적 스캔 테이블
-# ────────────────────────────────────────────
-def build_stock_section(stock_results, styles):
-    elements = []
-    if not stock_results:
-        elements.append(Paragraph("조건을 만족하는 종목이 없습니다.", styles["body"]))
-        return elements
+def _stoch_color(signal: str) -> colors.Color:
+    if "과매수" in signal: return C_RED
+    if "과매도" in signal: return C_BLUE
+    if "상승" in signal:  return C_BLUE
+    if "하락" in signal:  return C_RED
+    return C_GRAY
 
-    f  = "NanumGothic"     if "NanumGothic"     in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica"
-    fb = "NanumGothicBold" if "NanumGothicBold"  in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica-Bold"
 
-    header = ["종목명", "코드", "현재가", "등락률", "거래량비율", "200일선", "RSI", "다이버전스", "MACD"]
-    col_w  = [30*mm, 16*mm, 20*mm, 16*mm, 20*mm, 18*mm, 14*mm, 22*mm, 18*mm]
+def _score_color(score: int) -> colors.Color:
+    if score >= 120: return C_ORANGE
+    if score >= 90:  return C_BLUE
+    if score >= 60:  return C_GRAY
+    return colors.HexColor("#AAAAAA")
 
-    table_data = [header]
-    for r in stock_results:
-        div = r.get("divergence", "없음")
-        div_label = "🔺상승" if div == "상승" else ("🔻하락" if div == "하락" else "—")
-        gc_label  = "GC✅" if r.get("golden_cross") else ("H+✅" if r.get("hist_positive") else "—")
-        table_data.append([
-            r["name"],
-            r["code"],
-            f"{r['close']:,}",
-            f"{r['change_pct']:+.1f}%",
-            f"{r['volume_ratio']:.1f}배",
-            f"+{r['ma200_gap']:.1f}%",
-            f"{r.get('rsi', '-')}",
-            div_label,
-            gc_label,
+
+# ────────────────────────────────────────────────
+# 섹션 빌더
+# ────────────────────────────────────────────────
+
+def _build_header(ST: dict, collected_at: str, news_count: int) -> list:
+    elems = []
+    elems.append(Paragraph("📋 오늘의 이슈 리포트", ST["title"]))
+    elems.append(Paragraph(
+        f"조회 시간: {collected_at}　|　수집 뉴스: 총 {news_count}건",
+        ST["subtitle"]
+    ))
+    elems.append(_hr(thickness=1, color=C_ORANGE))
+    return elems
+
+
+def _build_theme_section(ST: dict, themes: list[ThemeIssue]) -> list:
+    elems = []
+    elems.append(Paragraph("🔥 오늘의 매크로 이슈", ST["section"]))
+    elems.append(_hr())
+
+    for i, theme in enumerate(themes[:8], 1):
+        arrow_color = C_ORANGE if theme.is_bullish else C_RED
+        direction_para = Paragraph(
+            f"<font color='#{arrow_color.hexval()[1:]}'>　{theme.direction}</font>",
+            ST["body"]
+        )
+
+        header_table = Table(
+            [[Paragraph(f"{i}　{theme.theme_name}", ST["theme_h"]), direction_para]],
+            colWidths=[120*mm, 40*mm]
+        )
+        header_table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,-1), C_LIGHT),
+            ("BOX", (0,0), (-1,-1), 0.3, C_BORDER),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("TOPPADDING", (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+            ("LEFTPADDING", (0,0), (0,-1), 6),
+        ]))
+        elems.append(header_table)
+
+        kw_text = "　".join(f"<b>{kw}</b>" for kw in theme.matched_keywords)
+        sector_text = "　".join(
+            f"<font color='#{C_BLUE.hexval()[1:]}'>{s}</font>"
+            for s in theme.related_sectors
+        )
+
+        detail_data = [
+            ["감지 키워드:", Paragraph(kw_text, ST["kw_lbl"])],
+            ["관련 섹터:",   Paragraph(sector_text, ST["kw_lbl"])],
+            ["뉴스 출처:",   Paragraph(f"{theme.news_count}건", ST["cell"])],
+        ]
+        if theme.summary:
+            detail_data.insert(0, ["요약:", Paragraph(theme.summary, ST["body"])])
+
+        detail_table = Table(detail_data, colWidths=[30*mm, 130*mm])
+        detail_table.setStyle(TableStyle([
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ("LEFTPADDING", (0,0), (0,-1), 12),
+            ("TOPPADDING", (0,0), (-1,-1), 2),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+            ("TEXTCOLOR", (0,0), (0,-1), C_GRAY),
+            ("FONTNAME", (0,0), (0,-1), FONT_REGULAR),
+            ("FONTSIZE", (0,0), (0,-1), 8),
+        ]))
+        elems.append(detail_table)
+        elems.append(Spacer(1, 4*mm))
+
+    return elems
+
+
+def _build_hot_keywords(ST: dict, keywords: list[tuple[str, int]]) -> list:
+    elems = []
+    elems.append(Paragraph("📊 핫 키워드 TOP 8", ST["section"]))
+    elems.append(_hr())
+
+    rows = []
+    for rank, (kw, cnt) in enumerate(keywords, 1):
+        rows.append([
+            Paragraph(f"#{rank}", ST["cell_b"]),
+            Paragraph(f"<b>{kw}</b>", ST["cell_b"]),
+            Paragraph(f"{cnt}건", ST["cell"]),
         ])
 
-    tbl = Table(table_data, colWidths=col_w, repeatRows=1)
-    tbl.setStyle(TableStyle([
-        ("BACKGROUND",   (0,0), (-1,0), COLOR_PRIMARY),
-        ("TEXTCOLOR",    (0,0), (-1,0), colors.white),
-        ("FONTNAME",     (0,0), (-1,0), fb),
-        ("FONTSIZE",     (0,0), (-1,-1), 8),
-        ("FONTNAME",     (0,1), (-1,-1), f),
-        ("ALIGN",        (0,0), (-1,-1), "CENTER"),
-        ("ALIGN",        (0,1), (0,-1), "LEFT"),
-        ("TOPPADDING",   (0,0), (-1,-1), 5),
-        ("BOTTOMPADDING",(0,0), (-1,-1), 5),
-        ("LEFTPADDING",  (0,1), (0,-1), 4),
-        *[("BACKGROUND", (0,i), (-1,i), COLOR_ACCENT) for i in range(2, len(table_data), 2)],
-        ("GRID",         (0,0), (-1,-1), 0.5, COLOR_DIVIDER),
-        ("LINEBELOW",    (0,0), (-1,0), 1.5, COLOR_PRIMARY),
+    if rows:
+        kw_table = Table(rows, colWidths=[15*mm, 50*mm, 20*mm])
+        kw_table.setStyle(TableStyle([
+            ("ROWBACKGROUNDS", (0,0), (-1,-1), [C_WHITE, C_LIGHT]),
+            ("GRID", (0,0), (-1,-1), 0.3, C_BORDER),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("TOPPADDING", (0,0), (-1,-1), 3),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+            ("LEFTPADDING", (0,0), (-1,-1), 6),
+        ]))
+        elems.append(kw_table)
+    elems.append(Spacer(1, 4*mm))
+    return elems
+
+
+def _build_stock_cards(ST: dict, scores: list[StockScore]) -> list:
+    """
+    정책 관전 종목 카드 테이블
+    컬럼: 시장, 종목명, 시총, 외인10일, 기관10일, RSI, 단기스토, 중기스토, 점수, 기술지표
+    """
+    elems = []
+    elems.append(Paragraph("🎯 정책 관전 종목 (점수 상위)", ST["section"]))
+    elems.append(_hr())
+
+    # 헤더
+    headers = ["시장", "종목명", "외인\n10일", "기관\n10일", "RSI",
+               "단기스토", "중기스토", "점수", "등급"]
+    col_w = [14*mm, 34*mm, 18*mm, 18*mm, 12*mm, 22*mm, 22*mm, 14*mm, 18*mm]
+
+    table_data = [headers]
+    for s in scores:
+        f_txt, f_sty = _supply_fmt(s.foreign_10d)
+        i_txt, i_sty = _supply_fmt(s.institution_10d)
+
+        row = [
+            Paragraph(getattr(s, "market", "KOSPI"), ST["cell"]),
+            Paragraph(f"<b>{s.name}</b>", ST["stock_n"]),
+            Paragraph(f_txt, ST[f_sty]),
+            Paragraph(i_txt, ST[i_sty]),
+            Paragraph(f"{s.rsi:.0f}", ST["cell_b"]),
+            Paragraph(
+                f"<font color='#{_stoch_color(s.stoch_short_signal).hexval()[1:]}'>"
+                f"{s.stoch_k_short:.0f} {s.stoch_short_signal}</font>",
+                ST["cell"]
+            ),
+            Paragraph(
+                f"<font color='#{_stoch_color(s.stoch_mid_signal).hexval()[1:]}'>"
+                f"{s.stoch_k_mid:.0f} {s.stoch_mid_signal}</font>",
+                ST["cell"]
+            ),
+            Paragraph(
+                f"<font color='#{_score_color(s.total).hexval()[1:]}'>"
+                f"<b>{s.total}점</b></font>",
+                ST["cell_b"]
+            ),
+            Paragraph(s.grade(), ST["cell"]),
+        ]
+        table_data.append(row)
+
+    card_table = Table(table_data, colWidths=col_w, repeatRows=1)
+    card_table.setStyle(TableStyle([
+        # 헤더
+        ("BACKGROUND",   (0,0), (-1,0), C_ORANGE),
+        ("TEXTCOLOR",    (0,0), (-1,0), C_WHITE),
+        ("FONTNAME",     (0,0), (-1,0), FONT_BOLD),
+        ("FONTSIZE",     (0,0), (-1,0), 8),
+        ("ALIGN",        (0,0), (-1,0), "CENTER"),
+        # 데이터 행
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [C_WHITE, C_CARD_BG]),
+        ("GRID",         (0,0), (-1,-1), 0.3, C_BORDER),
+        ("VALIGN",       (0,0), (-1,-1), "MIDDLE"),
+        ("TOPPADDING",   (0,0), (-1,-1), 3),
+        ("BOTTOMPADDING",(0,0), (-1,-1), 3),
+        ("LEFTPADDING",  (0,0), (-1,-1), 4),
+        # 점수 컬럼 (7번) 가운데 정렬
+        ("ALIGN",        (7,0), (7,-1), "CENTER"),
     ]))
-    elements.append(tbl)
-    return elements
+    elems.append(card_table)
+    elems.append(Spacer(1, 4*mm))
+    return elems
 
 
-# ────────────────────────────────────────────
-# SECTION 2: 뉴스 이슈 블록
-# ────────────────────────────────────────────
-def build_news_block(news_results, is_positive, styles):
-    elements = []
-    bg       = COLOR_POS_BG if is_positive else COLOR_NEG_BG
-    kw_style = styles["kw_pos"] if is_positive else styles["kw_neg"]
-    icon     = "▲" if is_positive else "▼"
+def _build_score_breakdown(ST: dict, scores: list[StockScore], top_n: int = 5) -> list:
+    """상위 5종목 점수 상세 분해"""
+    elems = []
+    elems.append(Paragraph("🔍 점수 상세 분석 (TOP 5)", ST["section"]))
+    elems.append(_hr())
 
-    if not news_results:
-        elements.append(Paragraph("해당 이슈 종목 없음", styles["body"]))
-        return elements
-
-    for r in news_results:
+    breakdown_headers = ["항목", "배점", "점수", "비율"]
+    for s in scores[:top_n]:
+        elems.append(Paragraph(f"▶ {s.name} ({s.code})  총점 {s.total}점  {s.grade()}", ST["theme_h"]))
         rows = [
-            [Paragraph(f"{icon} {r['name']}  ({r['code']})", styles["stock_name"])],
-            [Paragraph("키워드: " + "  |  ".join(r["keywords"]), kw_style)],
+            breakdown_headers,
+            ["RSI",        "20", str(s.rsi_score),         _pct(s.rsi_score,        20)],
+            ["스토캐스틱", "20", str(s.stoch_score),        _pct(s.stoch_score,       20)],
+            ["MACD",       "15", str(s.macd_score),         _pct(s.macd_score,        15)],
+            ["외인수급",   "20", str(s.foreign_score),      _pct(s.foreign_score,     20)],
+            ["기관수급",   "20", str(s.institution_score),  _pct(s.institution_score, 20)],
+            ["뉴스감성",   "25", str(s.news_score),         _pct(s.news_score,        25)],
+            ["테마이슈",   "10", str(s.theme_score),        _pct(s.theme_score,       10)],
+            ["가격모멘텀", "20", str(s.price_score),        _pct(s.price_score,       20)],
+            ["합계",      "150", str(s.total),              _pct(s.total,            150)],
         ]
-        for n in r["news"]:
-            title = n["title"][:55] + ("..." if len(n["title"]) > 55 else "")
-            rows.append([Paragraph(f"• {title}  [{n['source']}]", styles["news_item"])])
-
-        inner = Table(rows, colWidths=[166*mm])
-        inner.setStyle(TableStyle([
-            ("BACKGROUND",   (0,0), (-1,-1), bg),
-            ("TOPPADDING",   (0,0), (-1,-1), 4),
-            ("BOTTOMPADDING",(0,0), (-1,-1), 3),
-            ("LEFTPADDING",  (0,0), (-1,-1), 10),
-            ("RIGHTPADDING", (0,0), (-1,-1), 10),
-            ("LINEBELOW",    (0,-1), (-1,-1), 0.5, COLOR_DIVIDER),
+        t = Table(rows, colWidths=[40*mm, 20*mm, 20*mm, 30*mm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND",   (0,0), (-1,0), C_LIGHT),
+            ("FONTNAME",     (0,0), (-1,0), FONT_BOLD),
+            ("FONTSIZE",     (0,0), (-1,-1), 8),
+            ("GRID",         (0,0), (-1,-1), 0.3, C_BORDER),
+            ("ALIGN",        (1,0), (-1,-1), "CENTER"),
+            ("BACKGROUND",   (0,-1), (-1,-1), C_HEADER_BG),
+            ("FONTNAME",     (0,-1), (-1,-1), FONT_BOLD),
+            ("TOPPADDING",   (0,0), (-1,-1), 2),
+            ("BOTTOMPADDING",(0,0), (-1,-1), 2),
         ]))
-        elements.append(inner)
-        elements.append(Spacer(1, 3))
-    return elements
+        elems.append(t)
+        elems.append(Spacer(1, 4*mm))
+
+    return elems
 
 
-# ────────────────────────────────────────────
-# SECTION 3: 오늘의 종목
-# ────────────────────────────────────────────
-def build_top_picks(stock_results, positive_news, negative_news, styles):
-    """기술적 조건 ∩ 긍정뉴스, 부정뉴스 제외"""
-    elements = []
-
-    # 긍정 뉴스 종목명 셋
-    pos_names = {r["name"] for r in positive_news}
-    # 부정 뉴스 종목명 셋 (제외 대상)
-    neg_names = {r["name"] for r in negative_news}
-    # 뉴스 데이터 딕셔너리
-    pos_news_map = {r["name"]: r for r in positive_news}
-
-    picks = [
-        r for r in stock_results
-        if r["name"] in pos_names and r["name"] not in neg_names
-    ]
-
-    if not picks:
-        elements.append(Paragraph("오늘은 기술적 조건과 긍정 뉴스가 동시에 해당하는 종목이 없습니다.", styles["body"]))
-        return elements
-
-    for r in picks:
-        news_data = pos_news_map.get(r["name"], {})
-        keywords  = news_data.get("keywords", [])
-        news_list = news_data.get("news", [])
-
-        # 지표 한 줄 요약
-        div = r.get("divergence", "없음")
-        div_label = "🔺상승다이버전스" if div == "상승" else ("🔻하락다이버전스" if div == "하락" else "")
-        gc_label  = "MACD 골든크로스✅" if r.get("golden_cross") else ""
-        indicators = f"RSI {r.get('rsi','-')} ({r.get('rsi_status','')})  {div_label}  {gc_label}".strip()
-
-        rows = [
-            [Paragraph(f"★ {r['name']}  ({r['code']})", styles["gold_name"])],
-            [Paragraph(
-                f"📊 거래량 {r['volume_ratio']:.1f}배  |  {r['change_pct']:+.1f}%  |  200일선 +{r['ma200_gap']:.1f}%  |  현재가 {r['close']:,}원",
-                styles["body"]
-            )],
-            [Paragraph(f"📈 {indicators}", styles["indicator"])],
-        ]
-        if keywords:
-            rows.append([Paragraph("📰 뉴스키워드: " + "  |  ".join(keywords), styles["kw_pos"])])
-        for n in news_list:
-            title = n["title"][:55] + ("..." if len(n["title"]) > 55 else "")
-            rows.append([Paragraph(f"  • {title}  [{n['source']}]", styles["news_item"])])
-
-        inner = Table(rows, colWidths=[166*mm])
-        inner.setStyle(TableStyle([
-            ("BACKGROUND",   (0,0), (-1,-1), COLOR_GOLD_BG),
-            ("TOPPADDING",   (0,0), (-1,-1), 5),
-            ("BOTTOMPADDING",(0,0), (-1,-1), 4),
-            ("LEFTPADDING",  (0,0), (-1,-1), 10),
-            ("RIGHTPADDING", (0,0), (-1,-1), 10),
-            ("LINEBELOW",    (0,-1), (-1,-1), 1, COLOR_GOLD),
-        ]))
-        elements.append(inner)
-        elements.append(Spacer(1, 5))
-
-    return elements
+def _pct(score: int, max_score: int) -> str:
+    return f"{score/max_score*100:.0f}%"
 
 
-# ────────────────────────────────────────────
-# PDF 생성 메인
-# ────────────────────────────────────────────
-def generate_report(stock_results, positive_news, negative_news, trading_day,
-                    output_path="/tmp/stock_report.pdf"):
-    has_font = register_fonts()
-    styles   = get_styles(has_font)
+# ────────────────────────────────────────────────
+# 메인 생성 함수
+# ────────────────────────────────────────────────
+
+def generate_report(
+    themes: list[ThemeIssue],
+    scores: list[StockScore],
+    news_texts: list[str],
+    news_count: int = 0,
+    output_path: str = "오늘의종목.pdf",
+) -> str:
+    """
+    PDF 리포트 생성 후 파일 경로 반환
+    """
+    collected_at = datetime.now().strftime("%Y년 %m월 %d일 %H:%M")
+    ST = _styles()
 
     doc = SimpleDocTemplate(
-        output_path, pagesize=A4,
+        output_path,
+        pagesize=A4,
+        rightMargin=15*mm, leftMargin=15*mm,
         topMargin=15*mm, bottomMargin=15*mm,
-        leftMargin=20*mm, rightMargin=20*mm,
     )
-
-    date_str  = datetime.now().strftime("%Y년 %m월 %d일 %H:%M")
-    try:
-        base_date = datetime.strptime(trading_day, "%Y%m%d").strftime("%Y년 %m월 %d일")
-    except Exception:
-        base_date = date_str
-
-    # 오늘의 종목 수 계산
-    pos_names = {r["name"] for r in positive_news}
-    neg_names = {r["name"] for r in negative_news}
-    picks_count = len([r for r in stock_results if r["name"] in pos_names and r["name"] not in neg_names])
 
     story = []
 
-    # ── 헤더 ──────────────────────────────────
-    story.append(Paragraph("KRX 주식 스캔 리포트", styles["title"]))
-    story.append(Paragraph(f"생성: {date_str}  |  기준 거래일: {base_date}", styles["subtitle"]))
-    story.append(HRFlowable(width="100%", thickness=2, color=COLOR_PRIMARY, spaceAfter=8))
+    # 1. 헤더
+    story += _build_header(ST, collected_at, news_count)
+    story.append(Spacer(1, 5*mm))
 
-    # ── 요약 박스 ─────────────────────────────
-    summary_data = [[
-        Paragraph(f"기술적 조건\n{len(stock_results)}종목",  styles["body"]),
-        Paragraph(f"긍정 뉴스\n{len(positive_news)}종목",    styles["body"]),
-        Paragraph(f"부정 뉴스\n{len(negative_news)}종목",    styles["body"]),
-        Paragraph(f"⭐ 오늘의 종목\n{picks_count}종목",       styles["body"]),
-    ]]
-    s_tbl = Table(summary_data, colWidths=[42*mm]*4)
-    s_tbl.setStyle(TableStyle([
-        ("BACKGROUND",   (0,0), (0,0), COLOR_ACCENT),
-        ("BACKGROUND",   (1,0), (1,0), COLOR_POS_BG),
-        ("BACKGROUND",   (2,0), (2,0), COLOR_NEG_BG),
-        ("BACKGROUND",   (3,0), (3,0), COLOR_GOLD_BG),
-        ("ALIGN",        (0,0), (-1,-1), "CENTER"),
-        ("VALIGN",       (0,0), (-1,-1), "MIDDLE"),
-        ("TOPPADDING",   (0,0), (-1,-1), 10),
-        ("BOTTOMPADDING",(0,0), (-1,-1), 10),
-        ("GRID",         (0,0), (-1,-1), 0.5, COLOR_DIVIDER),
-    ]))
-    story.append(s_tbl)
-    story.append(Spacer(1, 14))
+    # 2. 매크로 이슈
+    story += _build_theme_section(ST, themes)
+    story.append(PageBreak())
 
-    # ══ SECTION 1: 기술적 스캔 ════════════════
-    story.append(section_header("📊  SECTION 1  |  기술적 스캔 결과", COLOR_PRIMARY, styles))
-    story.append(Spacer(1, 4))
+    # 3. 핫 키워드
+    hot_kw = count_hot_keywords(news_texts)
+    story += _build_hot_keywords(ST, hot_kw)
+    story.append(Spacer(1, 4*mm))
+
+    # 4. 종목 카드 테이블
+    story += _build_stock_cards(ST, scores)
+    story.append(PageBreak())
+
+    # 5. 점수 상세
+    story += _build_score_breakdown(ST, scores)
+
+    # 6. 푸터
+    story.append(_hr(thickness=0.5))
     story.append(Paragraph(
-        "필터 조건: ① 거래량 2배↑  ② 전일대비 2%↑  ③ 200일선 +3% (5일연속)  ④ 윗꼬리<몸통&아랫꼬리  |  RSI·MACD는 참고용",
-        styles["indicator"]
-    ))
-    story.append(Spacer(1, 4))
-    for el in build_stock_section(stock_results, styles):
-        story.append(el)
-    story.append(Spacer(1, 14))
-
-    # ══ SECTION 2: 뉴스 이슈 ═════════════════
-    story.append(section_header("📰  SECTION 2  |  뉴스 이슈", COLOR_GRAY, styles))
-    story.append(Spacer(1, 4))
-
-    story.append(Paragraph("🟢 긍정 이슈", styles["body"]))
-    story.append(Spacer(1, 3))
-    for el in build_news_block(positive_news, True, styles):
-        story.append(el)
-    story.append(Spacer(1, 8))
-
-    story.append(Paragraph("🔴 부정 이슈", styles["body"]))
-    story.append(Spacer(1, 3))
-    for el in build_news_block(negative_news, False, styles):
-        story.append(el)
-    story.append(Spacer(1, 14))
-
-    # ══ SECTION 3: 오늘의 종목 ═══════════════
-    story.append(section_header("⭐  SECTION 3  |  오늘의 종목  (기술적 조건 ∩ 긍정뉴스, 부정뉴스 제외)", COLOR_GOLD, styles))
-    story.append(Spacer(1, 4))
-    for el in build_top_picks(stock_results, positive_news, negative_news, styles):
-        story.append(el)
-
-    # ── 푸터 ──────────────────────────────────
-    story.append(Spacer(1, 16))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=COLOR_DIVIDER))
-    story.append(Spacer(1, 4))
-    story.append(Paragraph(
-        f"본 리포트는 자동 생성된 참고용 자료입니다.  |  {date_str}  |  KRX 주식 스캐너 봇",
-        styles["footer"]
+        f"오늘의 이슈 리포트 · 자동 생성 · {collected_at}",
+        ParagraphStyle("footer", fontName=FONT_REGULAR, fontSize=7,
+                       textColor=C_GRAY, alignment=1)
     ))
 
     doc.build(story)
-    logger.info("PDF 생성 완료: %s", output_path)
     return output_path
+
+
+# ────────────────────────────────────────────────
+# 텔레그램 전송용 텍스트 요약
+# ────────────────────────────────────────────────
+
+def build_telegram_summary(
+    themes: list[ThemeIssue],
+    scores: list[StockScore],
+    top_n: int = 10,
+) -> str:
+    """
+    텔레그램 메시지용 짧은 요약 텍스트 생성
+    """
+    lines = []
+    now = datetime.now().strftime("%m/%d %H:%M")
+    lines.append(f"📋 *오늘의 이슈 리포트* — {now}\n")
+
+    # 매크로 이슈
+    if themes:
+        lines.append("🔥 *매크로 이슈*")
+        for i, t in enumerate(themes[:5], 1):
+            lines.append(f"  {i}. {t.direction} {t.theme_name}  ({t.news_count}건)")
+        lines.append("")
+
+    # 상위 종목
+    if scores:
+        lines.append("🎯 *점수 상위 종목*")
+        lines.append("`종목명       점수  RSI  외인   기관`")
+        for s in scores[:top_n]:
+            f_sign = "+" if s.foreign_10d >= 0 else ""
+            i_sign = "+" if s.institution_10d >= 0 else ""
+            lines.append(
+                f"`{s.name[:8]:<8} {s.total:>4}점  "
+                f"{s.rsi:>3.0f}  "
+                f"{f_sign}{s.foreign_10d:>5.1f}만  "
+                f"{i_sign}{s.institution_10d:>5.1f}만`"
+            )
+
+    return "\n".join(lines)
