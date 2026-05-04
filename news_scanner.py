@@ -1,8 +1,8 @@
 import logging
 import feedparser
 import difflib
+import FinanceDataReader as fdr
 from datetime import datetime, timedelta
-from scanner import KOSPI_TICKERS, KOSDAQ_TICKERS
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +38,16 @@ class NewsScanner:
         if self._ticker_cache:
             return self._ticker_cache
         result = {}
-        for code, name in KOSPI_TICKERS + KOSDAQ_TICKERS:
-            result[name] = code
+        for market in ["KOSPI", "KOSDAQ"]:
+            try:
+                df = fdr.StockListing(market)
+                for _, row in df.iterrows():
+                    code = str(row.get("Code", row.get("Symbol", ""))).zfill(6)
+                    name = str(row.get("Name", ""))
+                    if code and name:
+                        result[name] = code
+            except Exception as e:
+                logger.warning("%s 로딩 실패: %s", market, str(e))
         self._ticker_cache = result
         logger.info("종목명 캐시 로드: %d개", len(result))
         return result
