@@ -1,32 +1,17 @@
-#python-telegram-bot
-#finance-datareader
-#pandas
-#APScheduler==3.10.4
-#setuptools>=68.0.0
-#feedparser==6.0.11
-#reportlab==4.2.0
-#requests
-
-# 텔레그램
-python-telegram-bot>=20.0
-apscheduler>=3.10
-
-# 주식 데이터
-finance-datareader
-pykrx>=1.0.45
-pandas>=2.0
-numpy>=1.24
-
-# PDF 생성
-reportlab>=4.0
-
-# 뉴스 수집 / 감성 분석
-feedparser>=6.0
-requests>=2.28
-beautifulsoup4>=4.12
-transformers>=4.35       # 감성 분석 모델 (선택, 무거우면 제거 가능)
-torch>=2.0               # transformers 의존 (Railway에서 무거우면 제거)
-
-# 유틸
-python-dotenv>=1.0
-pytz>=2023.3
+FROM python:3.11-slim
+ 
+# 한글 폰트만 설치 (apt 캐시 즉시 삭제)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-nanum \
+    && rm -rf /var/lib/apt/lists/*
+ 
+WORKDIR /app
+ 
+# requirements 먼저 복사 (레이어 캐시 활용)
+COPY requirements.txt .
+RUN pip install --no-cache-dir setuptools \
+    && pip install --no-cache-dir -r requirements.txt
+ 
+COPY . .
+ 
+CMD ["python", "bot.py"]
