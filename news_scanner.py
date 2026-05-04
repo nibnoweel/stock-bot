@@ -1,8 +1,8 @@
 import logging
 import feedparser
 import difflib
+import FinanceDataReader as fdr
 from datetime import datetime, timedelta
-from pykrx import stock
 
 logger = logging.getLogger(__name__)
 
@@ -38,30 +38,23 @@ class NewsScanner:
         if self._ticker_cache:
             return self._ticker_cache
         result = {}
-        for days_ago in [0, 3, 7]:
-            d = (datetime.now() - timedelta(days=days_ago)).strftime("%Y%m%d")
-            for market in ["KOSPI", "KOSDAQ"]:
-                try:
-                    codes = stock.get_market_ticker_list(date=d, market=market)
-                    for code in codes:
-                        try:
-                            name = stock.get_market_ticker_name(code)
-                            result[name] = code
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-            if result:
-                break
+        for market in ["KOSPI", "KOSDAQ"]:
+            try:
+                df = fdr.StockListing(market)
+                for _, row in df.iterrows():
+                    code = str(row.get("Code", row.get("Symbol", ""))).zfill(6)
+                    name = str(row.get("Name", ""))
+                    if code and name:
+                        result[name] = code
+            except Exception as e:
+                logger.warning("%s 로딩 실패: %s", market, str(e))
         self._ticker_cache = result
         logger.info("종목명 캐시 로드: %d개", len(result))
         return result
 
     def _is_duplicate(self, new_title, existing_titles, threshold=0.7):
-        """제목 유사도 70% 이상이면 중복으로 판단"""
         for title in existing_titles:
-            ratio = difflib.SequenceMatcher(None, new_title, title).ratio()
-            if ratio > threshold:
+            if difflib.SequenceMatcher(None, new_title, title).ratio() > threshold:
                 return True
         return False
 
@@ -69,7 +62,6 @@ class NewsScanner:
         news_list = []
         seen_links = set()
         seen_titles = []
-
         for source_name, url in RSS_SOURCES:
             try:
                 feed = feedparser.parse(url)
@@ -77,37 +69,24 @@ class NewsScanner:
                     title = entry.get("title", "").strip()
                     link = entry.get("link", "").strip()
                     summary = entry.get("summary", "")
-
-                    # URL 중복 제거
                     if link in seen_links:
                         continue
-                    # 제목 유사도 중복 제거
                     if self._is_duplicate(title, seen_titles):
                         continue
-
                     seen_links.add(link)
                     seen_titles.append(title)
                     news_list.append({
-                        "source": source_name,
-                        "title": title,
-                        "link": link,
-                        "summary": summary,
+                        "source": source_name, "title": title,
+                        "link": link, "summary": summary,
                         "text": title + " " + summary,
                     })
             except Exception as e:
-                logger.debug("%s RSS 수집 실패: %s", source_name, str(e))
-
-        logger.info("중복 제거 후 총 %d개 뉴스 수집", len(news_list))
+                logger.debug("%s RSS 실패: %s", source_name, str(e))
+        logger.info("중복 제거 후 %d개 뉴스 수집", len(news_list))
         return news_list
 
     def _match_tickers(self, text, tickers):
-        matched = []
-        for name, code in tickers.items():
-            if len(name) < 2:
-                continue
-            if name in text:
-                matched.append((name, code))
-        return matched
+        return [(n, c) for n, c in tickers.items() if len(n) >= 2 and n in text]
 
     def _classify(self, text):
         pos = [kw for kw in POSITIVE_KEYWORDS if kw in text]
@@ -118,7 +97,6 @@ class NewsScanner:
         tickers = self._load_tickers()
         news_list = self._fetch_news()
         stock_news = {}
-
         for news in news_list:
             text = news["text"]
             matched = self._match_tickers(text, tickers)
@@ -135,11 +113,8 @@ class NewsScanner:
                 existing = [n["title"] for n in stock_news[name]["news"]]
                 if news["title"] not in existing:
                     stock_news[name]["news"].append({
-                        "title": news["title"],
-                        "link": news["link"],
-                        "source": news["source"],
+                        "title": news["title"], "link": news["link"], "source": news["source"],
                     })
-
         positive_results = []
         negative_results = []
         for name, data in stock_news.items():
@@ -148,6 +123,5 @@ class NewsScanner:
                 positive_results.append({**item, "keywords": list(data["pos_kw"])})
             if data["neg_kw"]:
                 negative_results.append({**item, "keywords": list(data["neg_kw"])})
-
         logger.info("긍정: %d종목, 부정: %d종목", len(positive_results), len(negative_results))
         return positive_results, negative_results

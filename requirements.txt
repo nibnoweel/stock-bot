@@ -1,5 +1,5 @@
 python-telegram-bot==20.7
-pykrx==1.0.47
+FinanceDataReader==0.9.50
 pandas==2.2.2
 APScheduler==3.10.4
 setuptools>=68.0.0
