@@ -285,10 +285,22 @@ async def post_init(app: Application) -> None:
 # 메인
 # ────────────────────────────────────────────────
 def main():
+    # 시작 시 웹훅 + 이전 세션 강제 초기화
+    import requests
+    try:
+        requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook",
+            params={"drop_pending_updates": True},
+            timeout=10
+        )
+        logger.info("웹훅 초기화 완료")
+    except Exception as e:
+        logger.warning("웹훅 초기화 실패 (무시): %s", e)
+
     app = (
         Application.builder()
         .token(TELEGRAM_TOKEN)
-        .post_init(post_init)   # ← 이벤트 루프 안에서 스케줄러 시작
+        .post_init(post_init)
         .build()
     )
 
