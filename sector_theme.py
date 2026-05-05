@@ -1,11 +1,14 @@
 """
 sector_theme.py — 섹터 분류 + 테마 이슈 분류
 Finance-DataReader로 전 종목 섹터 로드 + 뉴스 기반 테마 감지
+
+[beta] GPT-5 Mini 동적 테마 감지 추가:
+  - 기존 하드코딩 12개 테마는 그대로 유지
+  - OPENAI_API_KEY 미설정 시 기존 방식으로 폴백
 """
 
-import json  # 추가
+import json
 import logging
-from datetime import datetime
 from dataclasses import dataclass, field
 import pandas as pd
 import FinanceDataReader as fdr
@@ -16,35 +19,28 @@ logger = logging.getLogger(__name__)
 # 섹터 매핑 — Finance-DataReader 동적 로드
 # ────────────────────────────────────────────────
 
-_SECTOR_CACHE: dict[str, str] = {}   # code → sector
+_SECTOR_CACHE: dict[str, str] = {}
 
 def load_sector_map() -> dict[str, str]:
     """Finance-DataReader(FDR)로 KOSPI + KOSDAQ 전 종목 및 섹터 로드"""
     global _SECTOR_CACHE
     if _SECTOR_CACHE:
         return _SECTOR_CACHE
-
     try:
-        # FDR은 StockListing('KRX') 한 번으로 코드, 이름, 산업(섹터)을 모두 가져옵니다.
         df_krx = fdr.StockListing('KRX')
-
         result = {}
         for _, row in df_krx.iterrows():
             code = row['Code']
-            # FDR의 Sector 컬럼 사용
             sector = row['Sector'] if pd.notna(row['Sector']) else "기타"
             result[code] = sector
-
         if result:
             _SECTOR_CACHE = result
             logger.info("FDR 섹터 매핑 로드 완료: %d개", len(result))
             return _SECTOR_CACHE
     except Exception as e:
         logger.error("FDR 섹터 로드 중 에러 발생: %s", e)
-
     return _SECTOR_CACHE
 
-# 수동 보완 섹터 맵
 MANUAL_SECTOR: dict[str, str] = {
     "005930": "반도체/소부장",  "000660": "반도체/소부장",
     "042700": "반도체/소부장",  "093370": "반도체/소부장",
@@ -65,15 +61,13 @@ MANUAL_SECTOR: dict[str, str] = {
 }
 
 def get_sector(code: str) -> str:
-    """해당 종목의 섹터명을 반환"""
     if code in MANUAL_SECTOR:
         return MANUAL_SECTOR[code]
-
     sector_map = load_sector_map()
     return sector_map.get(code, "기타")
 
 # ────────────────────────────────────────────────
-# 테마 이슈 분류
+# 테마 이슈 분류 (하드코딩)
 # ────────────────────────────────────────────────
 
 THEME_KEYWORDS: list[tuple] = [
@@ -99,6 +93,7 @@ class ThemeIssue:
     matched_keywords: list[str]
     news_count: int = 0
     related_stocks: list[str] = field(default_factory=list)
+    source: str = "keyword"  # "keyword" | "gpt"
 
     @property
     def is_bullish(self) -> bool:
@@ -110,9 +105,14 @@ def classify_news_to_themes(news_items: list[dict]) -> list[ThemeIssue]:
         text = item.get("title", "") + " " + item.get("text", "")
         for keywords, theme_name, direction, sectors in THEME_KEYWORDS:
             matched = [kw for kw in keywords if kw in text]
-            if not matched: continue
+            if not matched:
+                continue
             if theme_name not in hits:
-                hits[theme_name] = ThemeIssue(theme_name=theme_name, direction=direction, related_sectors=sectors, matched_keywords=list(matched))
+                hits[theme_name] = ThemeIssue(
+                    theme_name=theme_name, direction=direction,
+                    related_sectors=sectors, matched_keywords=list(matched),
+                    source="keyword"
+                )
             else:
                 for kw in matched:
                     if kw not in hits[theme_name].matched_keywords:
@@ -121,13 +121,126 @@ def classify_news_to_themes(news_items: list[dict]) -> list[ThemeIssue]:
     return sorted(hits.values(), key=lambda t: t.news_count, reverse=True)
 
 # ────────────────────────────────────────────────
-# Scanner에서 호출하는 핵심 함수 (ImportError 발생 지점)
+# [beta] GPT-5 Mini 동적 테마 감지
+# ────────────────────────────────────────────────
+
+_KNOWN_SECTORS = [
+    "반도체/소부장", "방산", "조선/해운", "전력/전기장비", "바이오/제약",
+    "AI/IT/게임", "자동차/부품", "에너지/화학", "금융/보험", "2차전지",
+    "건설/부동산", "유통/소비재", "기타"
+]
+
+_GPT_SYSTEM_PROMPT = """당신은 한국 주식시장 전문 애널리스트입니다.
+뉴스 제목 목록을 보고 오늘 주식시장에서 주목해야 할 테마 이슈를 추출합니다.
+
+규칙:
+1. 하드코딩 테마(아래 목록)에 해당하지 않는 새로운 테마만 추출합니다.
+2. 최소 3개 이상의 뉴스가 뒷받침되는 테마만 포함합니다.
+3. 최대 5개까지 추출합니다.
+4. 반드시 JSON 배열만 반환합니다. 다른 텍스트 없이.
+
+이미 처리된 기존 테마 목록 (이것들은 제외):
+- AI/데이터센터 투자 확대
+- 반도체 수출 호조
+- K-방산 수출 확대
+- 원전/SMR 정책 수혜
+- 중동 긴장 고조
+- 종전/평화 기대
+- 바이오 신약/임상
+- 스테이블코인/디지털자산 법제화
+- 미국 관세 리스크
+- 2차전지/배터리 정책
+- 금리 정책 변화
+- 조선/해운 수주 강세
+
+응답 형식 (JSON 배열):
+[
+  {
+    "theme_name": "테마명 (간결하게 10자 이내)",
+    "direction": "▲상승 또는 ▼하락",
+    "related_sectors": ["섹터1", "섹터2"],
+    "matched_keywords": ["키워드1", "키워드2"],
+    "news_count": 관련뉴스수(정수)
+  }
+]
+
+사용 가능한 섹터 목록: """ + ", ".join(_KNOWN_SECTORS)
+
+
+def _detect_themes_with_gpt(news_items: list[dict], known_theme_names: set[str]) -> list[ThemeIssue]:
+    try:
+        from config import OPENAI_API_KEY
+        if not OPENAI_API_KEY:
+            logger.info("[GPT 테마] OPENAI_API_KEY 미설정 — 스킵")
+            return []
+
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        titles = [item.get("title", "") for item in news_items if item.get("title")][:150]
+        if not titles:
+            return []
+
+        news_text = "\n".join(f"- {t}" for t in titles)
+        user_msg = f"다음은 오늘 수집된 한국 경제 뉴스 제목 {len(titles)}개입니다:\n\n{news_text}"
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": _GPT_SYSTEM_PROMPT},
+                {"role": "user",   "content": user_msg},
+            ],
+            temperature=0.3,
+            max_tokens=800,
+        )
+
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw.strip())
+        if not isinstance(data, list):
+            return []
+
+        results = []
+        for item in data:
+            name = item.get("theme_name", "").strip()
+            if not name or name in known_theme_names:
+                continue
+            results.append(ThemeIssue(
+                theme_name=name,
+                direction=item.get("direction", "▲상승"),
+                related_sectors=item.get("related_sectors", ["기타"]),
+                matched_keywords=item.get("matched_keywords", []),
+                news_count=int(item.get("news_count", 0)),
+                source="gpt",
+            ))
+
+        logger.info("[GPT 테마] 새 테마 %d개 감지", len(results))
+        return results
+
+    except json.JSONDecodeError as e:
+        logger.warning("[GPT 테마] JSON 파싱 실패: %s", e)
+        return []
+    except Exception as e:
+        logger.warning("[GPT 테마] 오류 발생 (폴백): %s", e)
+        return []
+
+
+def classify_news_to_themes_with_gpt(news_items: list[dict]) -> list[ThemeIssue]:
+    """[beta] 하드코딩 테마 + GPT 동적 테마를 합쳐서 반환."""
+    keyword_themes = classify_news_to_themes(news_items)
+    known_names = {t.theme_name for t in keyword_themes}
+    gpt_themes = _detect_themes_with_gpt(news_items, known_names)
+    return keyword_themes + gpt_themes
+
+# ────────────────────────────────────────────────
+# Scanner에서 호출하는 핵심 함수
 # ────────────────────────────────────────────────
 
 def match_stock_themes(code: str, themes: list[ThemeIssue]) -> int:
-    """해당 종목의 섹터가 오늘 감지된 테마(ThemeIssue)와 얼마나 겹치는지 확인"""
     sector = get_sector(code)
-    # 종목의 섹터가 테마의 '관련 섹터' 목록에 포함되어 있는지 확인
     return sum(1 for t in themes if sector in t.related_sectors)
 
 # ────────────────────────────────────────────────
