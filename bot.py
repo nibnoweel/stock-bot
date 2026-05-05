@@ -82,6 +82,33 @@ async def run_full_scan(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
             )
             logger.info("점수 계산 완료: %d종목", len(scores) if scores else 0)
 
+                    # 3스토 과열 알림
+                    if scores:
+                        overbought = [s for s in scores if s.triple_overbought]
+                        oversold   = [s for s in scores if s.triple_oversold]
+
+                        if overbought or oversold:
+                            alert_lines = ["⚠️ *3스토 신호 감지*\n"]
+                            if overbought:
+                                alert_lines.append("🔴 *과매수 (매도 주의)*")
+                                for s in overbought[:5]:
+                                    alert_lines.append(
+                                        f"  {s.name} | RSI {s.rsi:.0f} | "
+                                        f"단기스토 {s.stoch_k_short:.0f} | 중기스토 {s.stoch_k_mid:.0f} | {s.total}점"
+                                    )
+                            if oversold:
+                                alert_lines.append("\n🟢 *과매도 (매수 기회)*")
+                                for s in oversold[:5]:
+                                    alert_lines.append(
+                                        f"  {s.name} | RSI {s.rsi:.0f} | "
+                                        f"단기스토 {s.stoch_k_short:.0f} | 중기스토 {s.stoch_k_mid:.0f} | {s.total}점"
+                                    )
+                            await _bot.send_message(
+                                chat_id=CHAT_ID,
+                                text="\n".join(alert_lines),
+                                parse_mode="Markdown"
+                            )
+
         # 5. PDF 생성
         theme_news_map = build_theme_news_map(news_items, THEME_KEYWORDS)
         hot_kw_map     = build_hot_keyword_map(news_items)

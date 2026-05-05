@@ -222,7 +222,7 @@ def _score_color(score: int) -> colors.Color:
 
 
 def build_score_section(scores: list, styles: dict) -> list:
-    """SECTION 4: 점수 랭킹 테이블"""
+    """SECTION 4: 점수 랭킹 테이블 (3스토 과열 신호 포함)"""
     elements = []
     if not scores:
         elements.append(Paragraph("점수 산출 종목 없음", styles["body"]))
@@ -232,15 +232,14 @@ def build_score_section(scores: list, styles: dict) -> list:
     fb = "NanumGothicBold" if "NanumGothicBold" in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica-Bold"
 
     headers = ["종목명", "시총", "섹터", "외인10일", "기관10일", "RSI",
-               "단기스토", "중기스토", "점수", "등급"]
-    col_w   = [26*mm, 18*mm, 20*mm, 16*mm, 16*mm, 10*mm, 18*mm, 18*mm, 12*mm, 16*mm]
+               "단기스토", "중기스토", "점수", "등급", "신호"]
+    col_w   = [24*mm, 15*mm, 18*mm, 15*mm, 15*mm, 10*mm, 17*mm, 17*mm, 12*mm, 14*mm, 17*mm]
 
     table_data = [headers]
     for s in scores:
         f_txt, f_sty = _supply_fmt(s.foreign_10d)
         i_txt, i_sty = _supply_fmt(s.institution_10d)
         sc = s.total
-        sc_color = _score_color(sc)
 
         table_data.append([
             s.name,
@@ -252,7 +251,8 @@ def build_score_section(scores: list, styles: dict) -> list:
             f"{s.stoch_k_short:.0f} {s.stoch_short_signal}",
             f"{s.stoch_k_mid:.0f} {s.stoch_mid_signal}",
             f"{sc}점",
-            s.grade().strip(),
+            s.grade.strip(),
+            s.stoch_alert if hasattr(s, "stoch_alert") else "",
         ])
 
     tbl = Table(table_data, colWidths=col_w, repeatRows=1)
@@ -269,6 +269,14 @@ def build_score_section(scores: list, styles: dict) -> list:
         ("BOTTOMPADDING",(0,0),(-1,-1),4),
         ("LEFTPADDING",  (0,0),(-1,-1),4),
     ]))
+
+    # 3스토 과열/침체 행 배경색 강조 (헤더=0번째 행 제외, 1번째부터)
+    for idx, s in enumerate(scores, 1):
+        if hasattr(s, "triple_overbought") and s.triple_overbought:
+            tbl.setStyle(TableStyle([("BACKGROUND", (0, idx), (-1, idx), COLOR_NEG_BG)]))
+        elif hasattr(s, "triple_oversold") and s.triple_oversold:
+            tbl.setStyle(TableStyle([("BACKGROUND", (0, idx), (-1, idx), COLOR_POS_BG)]))
+
     elements.append(tbl)
     return elements
 
