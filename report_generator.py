@@ -274,11 +274,13 @@ def build_score_section(scores: list, styles: dict) -> list:
 
 # ── 신규 SECTION 5: 테마 이슈 ────────────────────
 
-def build_theme_section(themes: list, styles: dict) -> list:
+def build_theme_section(themes: list, styles: dict, theme_news_map: dict = None) -> list:
     elements = []
     if not themes:
         elements.append(Paragraph("감지된 테마 이슈 없음", styles["body"]))
         return elements
+
+    theme_news_map = theme_news_map or {}
 
     for i, t in enumerate(themes[:8], 1):
         dir_color = COLOR_POSITIVE if t.is_bullish else COLOR_NEGATIVE
@@ -286,10 +288,7 @@ def build_theme_section(themes: list, styles: dict) -> list:
 
         header_row = [[
             Paragraph(f"{i}.  {t.theme_name}", styles["theme_h"]),
-            Paragraph(
-                f"<font color='#{dir_hex}'>{t.direction}</font>",
-                styles["body"]
-            ),
+            Paragraph(f"<font color='#{dir_hex}'>{t.direction}</font>", styles["body"]),
         ]]
         header_tbl = Table(header_row, colWidths=[130*mm, 36*mm])
         header_tbl.setStyle(TableStyle([
@@ -301,10 +300,21 @@ def build_theme_section(themes: list, styles: dict) -> list:
         ]))
         elements.append(header_tbl)
 
+        # 출처별 건수 집계
+        headlines = theme_news_map.get(t.theme_name, [])
+        source_counts: dict[str, int] = {}
+        for h in headlines:
+            src = h.get("source", "")
+            source_counts[src] = source_counts.get(src, 0) + 1
+        source_str = "  ".join(
+            f"{src} {cnt}건" for src, cnt in
+            sorted(source_counts.items(), key=lambda x: x[1], reverse=True)
+        )
+
         detail_rows = [
             ["감지 키워드:", "  ".join(t.matched_keywords)],
             ["관련 섹터:",   "  ".join(t.related_sectors)],
-            ["뉴스 건수:",   f"{t.news_count}건"],
+            ["뉴스 출처:",   source_str if source_str else f"{t.news_count}건"],
         ]
         d_tbl = Table(detail_rows, colWidths=[25*mm, 141*mm])
         d_tbl.setStyle(TableStyle([
@@ -316,10 +326,68 @@ def build_theme_section(themes: list, styles: dict) -> list:
             ("BOTTOMPADDING",(0,0),(-1,-1),2),
         ]))
         elements.append(d_tbl)
-        elements.append(Spacer(1,5))
+
+        # 관련 헤드라인 출력
+        if headlines:
+            elements.append(Spacer(1, 2))
+            for h in headlines:
+                date   = h.get("date", "")
+                source = h.get("source", "")
+                title  = h.get("title", "")
+                label  = f"[{source}] {date}  {title}"
+                if len(label) > 80:
+                    label = label[:79] + "…"
+                elements.append(Paragraph(f"  • {label}", styles["news_item"]))
+
+        elements.append(Spacer(1, 6))
 
     return elements
 
+def build_hot_keywords_section(hot_kw_map: list, styles: dict) -> list:
+    """SECTION 6: 핫 키워드 TOP N — 출처 건수 + 헤드라인"""
+    elements = []
+    if not hot_kw_map:
+        elements.append(Paragraph("핫 키워드 없음", styles["body"]))
+        return elements
+
+    for rank, item in enumerate(hot_kw_map, 1):
+        kw      = item["keyword"]
+        total   = item["total"]
+        by_src  = item["by_source"]
+        lines   = item["headlines"]
+
+        # 출처별 건수 문자열
+        src_str = "  ".join(
+            f"{src} {cnt}건"
+            for src, cnt in sorted(by_src.items(), key=lambda x: x[1], reverse=True)
+        )
+
+        header_row = [[
+            Paragraph(f"#{rank}  {kw}  {total}건", styles["theme_h"]),
+            Paragraph(src_str, styles["cell"]),
+        ]]
+        h_tbl = Table(header_row, colWidths=[50*mm, 116*mm])
+        h_tbl.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,-1),COLOR_GOLD_BG),
+            ("TOPPADDING",(0,0),(-1,-1),4),
+            ("BOTTOMPADDING",(0,0),(-1,-1),4),
+            ("LEFTPADDING",(0,0),(-1,-1),8),
+            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ]))
+        elements.append(h_tbl)
+
+        for h in lines:
+            date   = h.get("date", "")
+            source = h.get("source", "")
+            title  = h.get("title", "")
+            label  = f"[{source}] {date}  {title}"
+            if len(label) > 80:
+                label = label[:79] + "…"
+            elements.append(Paragraph(f"  • {label}", styles["news_item"]))
+
+        elements.append(Spacer(1, 5))
+
+    return elements
 
 # ── 메인 generate_report (기존 시그니처 완전 유지) ──
 
@@ -329,9 +397,10 @@ def generate_report(
     negative_news,
     trading_day,
     output_path="/tmp/stock_report.pdf",
-    # 신규 선택 인자
-    scores=None,       # list[StockScore] | None
-    themes=None,       # list[ThemeIssue] | None
+    scores=None,
+    themes=None,
+    theme_news_map=None,   # 신규
+    hot_kw_map=None,       # 신규
 ):
     has_font = register_fonts()
     styles   = get_styles(has_font)
@@ -434,15 +503,25 @@ def generate_report(
         story.append(Spacer(1,14))
 
     # ══ SECTION 5: 테마 이슈 (선택) ═══════════════
-    if themes:
+       if themes:
+         story.append(section_header(
+             "🔥  SECTION 5  |  오늘의 매크로 테마 이슈",
+             COLOR_GRAY, styles
+         ))
+         story.append(Spacer(1,4))
+         for el in build_theme_section(themes, styles, theme_news_map):
+             story.append(el)
+         story.append(Spacer(1,14))
+    # ══ SECTION 6: 핫 키워드 ═══════════════════
+    if hot_kw_map:
         story.append(section_header(
-            "🔥  SECTION 5  |  오늘의 매크로 테마 이슈",
-            COLOR_GRAY, styles
+            "📊  SECTION 6  |  핫 키워드 TOP 8",
+            COLOR_PRIMARY, styles
         ))
         story.append(Spacer(1,4))
-        for el in build_theme_section(themes, styles):
+        for el in build_hot_keywords_section(hot_kw_map, styles):
             story.append(el)
-
+        story.append(Spacer(1,14))
     # ── 푸터 ─────────────────────────────────────
     story.append(Spacer(1,16))
     story.append(HRFlowable(width="100%", thickness=0.5, color=COLOR_DIVIDER))

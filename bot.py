@@ -11,9 +11,9 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from scanner import StockScanner
-from news_scanner import NewsScanner, fetch_all_news, build_stock_sentiment_map
+from news_scanner import NewsScanner, fetch_all_news, build_stock_sentiment_map, build_theme_news_map, build_hot_keyword_map
+from sector_theme import classify_news_to_themes_with_gpt, count_hot_keywords, THEME_KEYWORDS
 from report_generator import generate_report
-from sector_theme import classify_news_to_themes_with_gpt, count_hot_keywords
 from config import TELEGRAM_TOKEN, CHAT_ID, WEEKDAY_SCAN_TIMES, WEEKEND_SCAN_TIMES
 
 # 모든 로그의 기본 레벨은 INFO로 두되,
@@ -83,6 +83,9 @@ async def run_full_scan(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
             logger.info("점수 계산 완료: %d종목", len(scores) if scores else 0)
 
         # 5. PDF 생성
+        theme_news_map = build_theme_news_map(news_items, THEME_KEYWORDS)
+        hot_kw_map     = build_hot_keyword_map(news_items)
+
         pdf_path = generate_report(
             stock_results=stock_results,
             positive_news=positive_news,
@@ -90,6 +93,8 @@ async def run_full_scan(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
             trading_day=trading_day,
             scores=scores,
             themes=themes,
+            theme_news_map=theme_news_map,
+            hot_kw_map=hot_kw_map,
         )
 
         # 6. 요약 메시지
