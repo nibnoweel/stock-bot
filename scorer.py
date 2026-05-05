@@ -66,13 +66,13 @@ class StockScore:
     change_pct:       float = 0.0
     volume_ratio:     float = 0.0
     ma200_gap:        float = 0.0
+    market_cap:       float = 0.0   # 시가총액 (억원), 신규 추가
     divergence:       str   = "없음"
     golden_cross:     bool  = False
     hist_positive:    bool  = False
 
     stoch_short_signal: str = "-"
     stoch_mid_signal:   str = "-"
-
     sector: str = "기타"
 
     @property
@@ -89,7 +89,14 @@ class StockScore:
         if t >= 30:  return "    중립"
         return              "    회피"
 
-
+    def cap_label(self) -> str:
+        """시총 구간 레이블"""
+        c = self.market_cap
+        if c <= 0:       return "-"
+        if c >= 100000:  return "대형 (10조↑)"
+        if c >= 10000:   return "중형 (1~10조)"
+        if c >= 3000:    return "중소형 (3천억~1조)"
+        return                  "소형 (3천억↓)"
 # ────────────────────────────────────────────────
 # 채점 함수
 # ────────────────────────────────────────────────

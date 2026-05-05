@@ -111,3 +111,21 @@ def supply_arrow(val: float) -> str:
     sign  = "+" if val >= 0 else ""
     arrow = "🔥" if val >= 50 else ("▲" if val > 0 else ("▼" if val < -50 else "•"))
     return f"{sign}{val:.1f}만{arrow}"
+
+def supply_icon(val: float) -> str:
+    """
+    외인/기관 10일 순매수 아이콘
+    🔥 : 50만주 이상 대량 순매수
+    ▲  : 0 초과 순매수
+    •  : -10만주 ~ 0 (소폭 순매도)
+    ▼  : -10만주 미만 순매도
+    """
+    if val >= 50:   return "🔥"
+    if val > 0:     return "▲"
+    if val >= -10:  return "•"
+    return                 "▼"
+
+def supply_fmt(val: float) -> str:
+    """리포트 표시용 — +85.1만 🔥 형태"""
+    sign = "+" if val >= 0 else ""
+    return f"{sign}{val:.1f}만 {supply_icon(val)}"

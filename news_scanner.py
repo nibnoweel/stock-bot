@@ -14,7 +14,10 @@ import feedparser
 import difflib
 from datetime import datetime, timedelta
 import FinanceDataReader as fdr
-
+# ── [신규] 증권사 목표주가 변동 수집 ────────────
+import re
+# 네이버 금융 리서치 RSS (공개)
+_RESEARCH_RSS = "https://finance.naver.com/research/debenture_list.naver"
 logger = logging.getLogger(__name__)
 
 RSS_SOURCES = [
@@ -326,3 +329,89 @@ def build_hot_keyword_map(
         reverse=True,
     )
     return result[:top_n]
+
+def fetch_target_price_changes(max_items: int = 20) -> list[dict]:
+    """
+    네이버 금융 리서치에서 목표주가 변동 리포트 수집.
+    반환:
+    [
+      {
+        "name":       "삼성전자",
+        "direction":  "상향" | "하향" | "유지" | "신규",
+        "target":     80000,      # 목표주가 (원), 없으면 None
+        "current":    75000,      # 현재가, 없으면 None
+        "gap_pct":    6.7,        # 괴리율 (%), 없으면 None
+        "firm":       "하나증권",
+        "summary":    "리포트 제목",
+        "date":       "04.17",
+      },
+      ...
+    ]
+    """
+    results = []
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(
+            "https://finance.naver.com/research/debenture_list.naver",
+            headers=headers, timeout=10
+        )
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        rows = soup.select("table.type_1 tr")
+        for row in rows[:max_items * 2]:
+            cols = row.select("td")
+            if len(cols) < 5:
+                continue
+            try:
+                name    = cols[0].get_text(strip=True)
+                title   = cols[1].get_text(strip=True)
+                firm    = cols[2].get_text(strip=True)
+                date    = cols[4].get_text(strip=True)
+
+                # 목표주가 파싱 (제목에서 숫자 추출)
+                price_matches = re.findall(r"[\d,]+원", title)
+                target = None
+                if price_matches:
+                    try:
+                        target = int(price_matches[-1].replace(",", "").replace("원", ""))
+                    except Exception:
+                        pass
+
+                # 방향 감지
+                direction = "유지"
+                if any(kw in title for kw in ["상향", "목표주가 상향", "TP 상향"]):
+                    direction = "상향"
+                elif any(kw in title for kw in ["하향", "목표주가 하향", "TP 하향"]):
+                    direction = "하향"
+                elif any(kw in title for kw in ["신규", "커버리지 개시"]):
+                    direction = "신규"
+
+                if not name or len(name) < 2:
+                    continue
+
+                results.append({
+                    "name":      name,
+                    "direction": direction,
+                    "target":    target,
+                    "current":   None,   # 현재가는 별도 조회 필요
+                    "gap_pct":   None,
+                    "firm":      firm,
+                    "summary":   title[:60],
+                    "date":      date,
+                })
+
+                if len(results) >= max_items:
+                    break
+
+            except Exception:
+                continue
+
+    except ImportError:
+        logger.warning("beautifulsoup4 미설치 — 목표주가 수집 스킵")
+    except Exception as e:
+        logger.warning("목표주가 수집 실패: %s", e)
+
+    return results

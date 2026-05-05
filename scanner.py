@@ -94,11 +94,10 @@ class StockScanner:
         return df[needed].dropna()
 
     # ── [신규] 1차 필터 — StockListing 기반 ──────
-    def _pre_filter_tickers(self, trading_day: str) -> list[tuple[str, str]]:
+    def _pre_filter_tickers(self, trading_day: str) -> list[tuple[str, str, float]]:
         """
         StockListing에서 당일 등락률 / 거래량으로 사전 필터링.
-        FDR StockListing은 장 마감 후 당일 데이터 포함.
-        필터 통과 종목만 OHLCV 상세 검사 대상으로 반환.
+        반환: (code, name, market_cap_억원) 튜플 리스트
         """
         candidates = []
         for market in self.markets:
@@ -106,7 +105,6 @@ class StockScanner:
                 df = fdr.StockListing(market)
                 df["Code"] = df["Code"].astype(str).str.zfill(6)
 
-                # 컬럼명 정규화 (FDR 버전마다 다를 수 있음)
                 col_map = {}
                 for c in df.columns:
                     cl = c.lower()
@@ -114,23 +112,31 @@ class StockScanner:
                         col_map["change"] = c
                     elif cl == "volume" or cl == "거래량":
                         col_map["volume"] = c
+                    elif cl in ("marcap", "시가총액", "marketcap"):
+                        col_map["marcap"] = c
 
                 if "change" not in col_map or "volume" not in col_map:
-                    # 컬럼 없으면 전체 통과 (안전 폴백)
                     logger.warning("%s StockListing 컬럼 부재 — 전체 스캔", market)
                     for _, row in df.iterrows():
-                        candidates.append((str(row["Code"]), str(row["Name"])))
+                        candidates.append((str(row["Code"]), str(row["Name"]), 0.0))
                     continue
 
                 change_col = col_map["change"]
                 volume_col = col_map["volume"]
+                marcap_col = col_map.get("marcap")
 
                 filtered = df[
                     (pd.to_numeric(df[change_col], errors="coerce").fillna(0) >= _PRE_FILTER_CHANGE_PCT) &
                     (pd.to_numeric(df[volume_col], errors="coerce").fillna(0) >= _PRE_FILTER_VOLUME_MIN)
                 ]
                 for _, row in filtered.iterrows():
-                    candidates.append((str(row["Code"]), str(row["Name"])))
+                    marcap = 0.0
+                    if marcap_col:
+                        try:
+                            marcap = float(row[marcap_col]) / 1e8  # 원 → 억원
+                        except Exception:
+                            pass
+                    candidates.append((str(row["Code"]), str(row["Name"]), marcap))
 
                 logger.info("%s: %d개 → 1차 필터 후 %d개", market, len(df), len(filtered))
 
@@ -140,7 +146,7 @@ class StockScanner:
                     df = fdr.StockListing(market)
                     df["Code"] = df["Code"].astype(str).str.zfill(6)
                     for _, row in df.iterrows():
-                        candidates.append((str(row["Code"]), str(row["Name"])))
+                        candidates.append((str(row["Code"]), str(row["Name"]), 0.0))
                 except Exception:
                     pass
 
@@ -355,6 +361,7 @@ class StockScanner:
             code     = result["code"]
             df_ohlcv = result.pop("_df")
             supply   = supply_map.get(code, {"foreign_10d": 0.0, "institution_10d": 0.0})
+            marcap   = marcap_map.get(code, 0.0)   # 신규
 
             s = score_from_scan(
                 scan_result=result,
@@ -365,6 +372,7 @@ class StockScanner:
                 matched_themes=match_stock_themes(code, themes),
                 sector=get_sector(code),
             )
+            s.market_cap = marcap   # StockScore에 동적 추가
             scores.append(s)
             logger.info("점수: %s (%s) — %d점", result["name"], code, s.total)
 

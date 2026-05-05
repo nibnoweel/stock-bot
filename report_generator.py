@@ -231,9 +231,9 @@ def build_score_section(scores: list, styles: dict) -> list:
     f  = "NanumGothic"     if "NanumGothic"    in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica"
     fb = "NanumGothicBold" if "NanumGothicBold" in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica-Bold"
 
-    headers = ["종목명", "섹터", "외인10일", "기관10일", "RSI",
+    headers = ["종목명", "시총", "섹터", "외인10일", "기관10일", "RSI",
                "단기스토", "중기스토", "점수", "등급"]
-    col_w   = [28*mm, 24*mm, 18*mm, 18*mm, 12*mm, 20*mm, 20*mm, 14*mm, 18*mm]
+    col_w   = [26*mm, 18*mm, 20*mm, 16*mm, 16*mm, 10*mm, 18*mm, 18*mm, 12*mm, 16*mm]
 
     table_data = [headers]
     for s in scores:
@@ -244,6 +244,7 @@ def build_score_section(scores: list, styles: dict) -> list:
 
         table_data.append([
             s.name,
+            s.cap_label if hasattr(s, "cap_label") else "-",
             s.sector,
             f_txt,
             i_txt,
@@ -270,7 +271,6 @@ def build_score_section(scores: list, styles: dict) -> list:
     ]))
     elements.append(tbl)
     return elements
-
 
 # ── 신규 SECTION 5: 테마 이슈 ────────────────────
 
@@ -343,6 +343,7 @@ def build_theme_section(themes: list, styles: dict, theme_news_map: dict = None)
 
     return elements
 
+# ── SECTION 6: 핫 키워드 TOP N — 출처 건수 + 헤드라인 ────────────────────
 def build_hot_keywords_section(hot_kw_map: list, styles: dict) -> list:
     """SECTION 6: 핫 키워드 TOP N — 출처 건수 + 헤드라인"""
     elements = []
@@ -389,6 +390,54 @@ def build_hot_keywords_section(hot_kw_map: list, styles: dict) -> list:
 
     return elements
 
+def build_target_price_section(tp_list: list, styles: dict) -> list:
+    """SECTION 7: 증권사 목표주가 변동"""
+    elements = []
+    if not tp_list:
+        elements.append(Paragraph("수집된 목표주가 변동 없음", styles["body"]))
+        return elements
+
+    f  = "NanumGothic"     if "NanumGothic"    in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica"
+    fb = "NanumGothicBold" if "NanumGothicBold" in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica-Bold"
+
+    headers = ["방향", "종목명", "목표주가", "증권사", "핵심요약", "날짜"]
+    col_w   = [14*mm, 28*mm, 22*mm, 22*mm, 70*mm, 14*mm]
+
+    table_data = [headers]
+    for item in tp_list:
+        direction = item.get("direction", "유지")
+        icon = {"상향": "🔺 상향", "하향": "🔻 하향", "신규": "🆕 신규"}.get(direction, "— 유지")
+        target = f"{item['target']:,}원" if item.get("target") else "-"
+        gap    = f"+{item['gap_pct']:.1f}%" if item.get("gap_pct") else "-"
+
+        table_data.append([
+            icon,
+            item.get("name", "-"),
+            target,
+            item.get("firm", "-"),
+            item.get("summary", "-")[:40],
+            item.get("date", "-"),
+        ])
+
+    tbl = Table(table_data, colWidths=col_w, repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0),(-1,0), COLOR_PRIMARY),
+        ("TEXTCOLOR",     (0,0),(-1,0), colors.white),
+        ("FONTNAME",      (0,0),(-1,0), fb),
+        ("FONTSIZE",      (0,0),(-1,-1), 8),
+        ("FONTNAME",      (0,1),(-1,-1), f),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.white, COLOR_BLUE_BG]),
+        ("GRID",          (0,0),(-1,-1), 0.3, COLOR_DIVIDER),
+        ("ALIGN",         (0,0),(-1,-1), "CENTER"),
+        ("ALIGN",         (1,1),(1,-1),  "LEFT"),
+        ("ALIGN",         (4,1),(4,-1),  "LEFT"),
+        ("TOPPADDING",    (0,0),(-1,-1), 4),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 4),
+        ("LEFTPADDING",   (0,0),(-1,-1), 4),
+    ]))
+    elements.append(tbl)
+    return elements
+
 # ── 메인 generate_report (기존 시그니처 완전 유지) ──
 
 def generate_report(
@@ -401,6 +450,7 @@ def generate_report(
     themes=None,
     theme_news_map=None,   # 신규
     hot_kw_map=None,       # 신규
+    tp_list=None,       # 신규: 목표주가 변동
 ):
     has_font = register_fonts()
     styles   = get_styles(has_font)
@@ -520,6 +570,16 @@ def generate_report(
         ))
         story.append(Spacer(1,4))
         for el in build_hot_keywords_section(hot_kw_map, styles):
+            story.append(el)
+        story.append(Spacer(1,14))
+    # ══ SECTION 7: 목표주가 변동 ═══════════════
+    if tp_list:
+        story.append(section_header(
+            "✨  SECTION 7  |  증권사 목표주가 변동",
+            COLOR_GOLD, styles
+        ))
+        story.append(Spacer(1,4))
+        for el in build_target_price_section(tp_list, styles):
             story.append(el)
         story.append(Spacer(1,14))
     # ── 푸터 ─────────────────────────────────────
