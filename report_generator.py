@@ -125,7 +125,10 @@ def generate_report(
     trading_day,
     output_path="/tmp/report.pdf",
     scores=None,
-    themes=None
+    themes=None,
+    theme_news_map=None,
+    hot_kw_map=None,
+    tp_list=None
 ):
     has_font = register_fonts()
     styles = get_styles(has_font)
