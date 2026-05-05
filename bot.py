@@ -48,13 +48,13 @@ async def run_full_scan(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
     is_trading = _is_trading_day()
     logger.info("스캔 시작 (거래일: %s)", is_trading)
 
-    if datetime.now().hour < 6:
-        await _bot.send_message(
-            chat_id=CHAT_ID,
-            text="⚠️ 현재 KRX 서버 점검 시간(00:00~06:00)입니다.\n오전 6시 이후에 다시 시도해주세요.",
-            parse_mode="Markdown"
-        )
-        return
+#     if datetime.now().hour < 6:
+#         await _bot.send_message(
+#             chat_id=CHAT_ID,
+#             text="⚠️ 현재 KRX 서버 점검 시간(00:00~06:00)입니다.\n오전 6시 이후에 다시 시도해주세요.",
+#             parse_mode="Markdown"
+#         )
+#         return
 
     try:
         trading_day = scanner._latest_trading_day()
