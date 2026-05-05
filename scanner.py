@@ -279,7 +279,7 @@ class StockScanner:
         with ThreadPoolExecutor(max_workers=_OHLCV_WORKERS) as executor:
             future_map = {
                 executor.submit(self._check_conditions, code, name, trading_day): (code, name)
-                for code, name in tickers
+                for code, name, *_ in tickers
             }
             for future in as_completed(future_map):
                 done += 1
@@ -355,6 +355,7 @@ class StockScanner:
             return []
 
         supply_map = self._parallel_supply(results)
+        marcap_map = {code: marcap for code, name, marcap in candidates}
 
         scores: list[StockScore] = []
         for result in results:

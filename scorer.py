@@ -80,7 +80,7 @@ class StockScore:
         return (self.rsi_score + self.stoch_score + self.macd_score
                 + self.foreign_score + self.institution_score
                 + self.news_score + self.theme_score + self.price_score)
-
+    @property
     def grade(self) -> str:
         t = self.total
         if t >= 120: return "★★★ 강매수"
@@ -89,6 +89,7 @@ class StockScore:
         if t >= 30:  return "    중립"
         return              "    회피"
 
+    @property
     def cap_label(self) -> str:
         """시총 구간 레이블"""
         c = self.market_cap

@@ -11,7 +11,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from scanner import StockScanner
-from news_scanner import NewsScanner, fetch_all_news, build_stock_sentiment_map, build_theme_news_map, build_hot_keyword_map, fetch_target_price_changes)   # 신규
+from news_scanner import (NewsScanner, fetch_all_news, build_stock_sentiment_map, build_theme_news_map, build_hot_keyword_map, fetch_target_price_changes)   # 신규
 from sector_theme import classify_news_to_themes_with_gpt, count_hot_keywords, THEME_KEYWORDS
 from report_generator import generate_report
 from config import TELEGRAM_TOKEN, CHAT_ID, WEEKDAY_SCAN_TIMES, WEEKEND_SCAN_TIMES
