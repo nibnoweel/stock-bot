@@ -2,10 +2,15 @@
 scanner.py
 pykrx → FinanceDataReader 전환
 OHLCV 컬럼: Open, High, Low, Close, Volume (영문 대문자)
+
+[최적화] StockListing 1차 필터 + ThreadPoolExecutor 병렬 처리
+  - 2771종목 순차 → 후보 필터 후 병렬 처리
+  - 예상 속도: 23분 → 1~2분
 """
 
 import logging
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import FinanceDataReader as fdr
@@ -16,12 +21,20 @@ from sector_theme import get_sector, match_stock_themes, ThemeIssue
 
 logger = logging.getLogger(__name__)
 
+# 병렬 처리 워커 수
+_OHLCV_WORKERS   = 20   # OHLCV 조회 병렬 수
+_SUPPLY_WORKERS  = 10   # 수급 조회 병렬 수
+
+# 1차 필터 기준 (StockListing 데이터로 사전 필터링)
+_PRE_FILTER_CHANGE_PCT  = 1.5   # 등락률 최소 (%)  — 여유있게 설정
+_PRE_FILTER_VOLUME_MIN  = 10000 # 최소 거래량 (주)
+
 
 class StockScanner:
     def __init__(self):
         self.markets = ["KOSPI", "KOSDAQ"]
 
-    # ── 공휴일 / 거래일 (기존 완전 유지) ──────────
+    # ── 공휴일 / 거래일 ──────────────────────────
     KR_HOLIDAYS = {
         "20250101", "20250128", "20250129", "20250130",
         "20250301", "20250505", "20250506", "20250606",
@@ -54,12 +67,8 @@ class StockScanner:
                 return d.strftime("%Y%m%d")
         return (now - timedelta(days=1)).strftime("%Y%m%d")
 
-    # ── OHLCV — FDR 전환 ─────────────────────────
+    # ── OHLCV — FDR ──────────────────────────────
     def _get_ohlcv(self, code: str, end_date: str, days: int = 300) -> pd.DataFrame:
-        """
-        FDR DataReader → 컬럼 Open/High/Low/Close/Volume
-        pykrx 호환을 위해 한글 컬럼명으로 rename
-        """
         end_dt   = datetime.strptime(end_date, "%Y%m%d")
         start_dt = end_dt - timedelta(days=days + 60)
         df = fdr.DataReader(
@@ -70,7 +79,6 @@ class StockScanner:
         if df is None or df.empty:
             return pd.DataFrame()
 
-        # FDR 컬럼 → 기존 pykrx 컬럼명으로 rename (내부 로직 재사용)
         rename_map = {
             "Open":   "시가",
             "High":   "고가",
@@ -79,19 +87,68 @@ class StockScanner:
             "Volume": "거래량",
         }
         df = df.rename(columns=rename_map)
-
-        # 필요 컬럼만 추출
         needed = ["시가", "고가", "저가", "종가", "거래량"]
         missing = [c for c in needed if c not in df.columns]
         if missing:
-            logger.debug("%s 컬럼 누락: %s", code, missing)
             return pd.DataFrame()
-
         return df[needed].dropna()
 
-    # ── 전 종목 티커 — FDR 전환 ──────────────────
+    # ── [신규] 1차 필터 — StockListing 기반 ──────
+    def _pre_filter_tickers(self, trading_day: str) -> list[tuple[str, str]]:
+        """
+        StockListing에서 당일 등락률 / 거래량으로 사전 필터링.
+        FDR StockListing은 장 마감 후 당일 데이터 포함.
+        필터 통과 종목만 OHLCV 상세 검사 대상으로 반환.
+        """
+        candidates = []
+        for market in self.markets:
+            try:
+                df = fdr.StockListing(market)
+                df["Code"] = df["Code"].astype(str).str.zfill(6)
+
+                # 컬럼명 정규화 (FDR 버전마다 다를 수 있음)
+                col_map = {}
+                for c in df.columns:
+                    cl = c.lower()
+                    if "change" in cl and "ratio" in cl:
+                        col_map["change"] = c
+                    elif cl == "volume" or cl == "거래량":
+                        col_map["volume"] = c
+
+                if "change" not in col_map or "volume" not in col_map:
+                    # 컬럼 없으면 전체 통과 (안전 폴백)
+                    logger.warning("%s StockListing 컬럼 부재 — 전체 스캔", market)
+                    for _, row in df.iterrows():
+                        candidates.append((str(row["Code"]), str(row["Name"])))
+                    continue
+
+                change_col = col_map["change"]
+                volume_col = col_map["volume"]
+
+                filtered = df[
+                    (pd.to_numeric(df[change_col], errors="coerce").fillna(0) >= _PRE_FILTER_CHANGE_PCT) &
+                    (pd.to_numeric(df[volume_col], errors="coerce").fillna(0) >= _PRE_FILTER_VOLUME_MIN)
+                ]
+                for _, row in filtered.iterrows():
+                    candidates.append((str(row["Code"]), str(row["Name"])))
+
+                logger.info("%s: %d개 → 1차 필터 후 %d개", market, len(df), len(filtered))
+
+            except Exception as e:
+                logger.warning("%s 1차 필터 실패 — 전체 스캔 폴백: %s", market, e)
+                try:
+                    df = fdr.StockListing(market)
+                    df["Code"] = df["Code"].astype(str).str.zfill(6)
+                    for _, row in df.iterrows():
+                        candidates.append((str(row["Code"]), str(row["Name"])))
+                except Exception:
+                    pass
+
+        logger.info("1차 필터 완료: %d개 후보", len(candidates))
+        return candidates
+
     def _get_all_tickers(self, trading_day: str) -> list[tuple[str, str]]:
-        """FDR StockListing으로 KOSPI + KOSDAQ 전 종목"""
+        """FDR StockListing으로 KOSPI + KOSDAQ 전 종목 (폴백용 유지)"""
         tickers = []
         for market in self.markets:
             try:
@@ -104,7 +161,7 @@ class StockScanner:
         logger.info("전 종목 로드: %d개", len(tickers))
         return tickers
 
-    # ── 캔들 / RSI / MACD (기존 로직 완전 유지) ──
+    # ── 캔들 / RSI / MACD ────────────────────────
     @staticmethod
     def _candle_parts(row):
         open_ = row["시가"]; high  = row["고가"]
@@ -154,7 +211,7 @@ class StockScanner:
                 return True
         return False
 
-    # ── 조건 검사 (기존 로직 완전 유지) ─────────
+    # ── 조건 검사 ────────────────────────────────
     def _check_conditions(self, code, name, end_date):
         try:
             df = self._get_ohlcv(code, end_date, days=300)
@@ -206,29 +263,72 @@ class StockScanner:
             logger.debug("%s 조건 검사 오류: %s", code, e)
             return None
 
-    # ── 기존 scan() 유지 ─────────────────────────
+    # ── [최적화] 병렬 OHLCV 스캔 ─────────────────
+    def _parallel_scan(self, tickers: list[tuple[str, str]], trading_day: str) -> list[dict]:
+        """ThreadPoolExecutor로 OHLCV 조회 + 조건 검사 병렬 처리"""
+        results = []
+        total = len(tickers)
+        done  = 0
+
+        with ThreadPoolExecutor(max_workers=_OHLCV_WORKERS) as executor:
+            future_map = {
+                executor.submit(self._check_conditions, code, name, trading_day): (code, name)
+                for code, name in tickers
+            }
+            for future in as_completed(future_map):
+                done += 1
+                if done % 50 == 0:
+                    logger.info("OHLCV 검사 중... %d / %d", done, total)
+                try:
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                        logger.info("조건 만족: %s (%s)", result["name"], result["code"])
+                except Exception as e:
+                    code, name = future_map[future]
+                    logger.debug("%s 병렬 처리 오류: %s", code, e)
+
+        return results
+
+    # ── [최적화] 병렬 수급 조회 ───────────────────
+    def _parallel_supply(self, results: list[dict]) -> dict[str, dict]:
+        """조건 통과 종목 수급을 병렬로 한꺼번에 조회"""
+        supply_map: dict[str, dict] = {}
+
+        def _fetch(code):
+            return code, fetch_investor_data(code, days=10)
+
+        with ThreadPoolExecutor(max_workers=_SUPPLY_WORKERS) as executor:
+            futures = {executor.submit(_fetch, r["code"]): r["code"] for r in results}
+            for future in as_completed(futures):
+                try:
+                    code, data = future.result()
+                    supply_map[code] = data
+                except Exception as e:
+                    code = futures[future]
+                    logger.debug("%s 수급 조회 오류: %s", code, e)
+                    supply_map[code] = {"foreign_10d": 0.0, "institution_10d": 0.0}
+
+        return supply_map
+
+    # ── scan() ────────────────────────────────────
     def scan(self) -> list:
         if self._is_maintenance_time():
             logger.warning("KRX 서버 점검 시간 (00:00~06:00) — 스캔 불가")
             return []
-        trading_day = self._latest_trading_day()
-        tickers     = self._get_all_tickers(trading_day)
-        logger.info("총 %d개 종목 스캔 시작 (기준일: %s)", len(tickers), trading_day)
 
-        results = []
-        for i, (code, name) in enumerate(tickers):
-            if i % 100 == 0:
-                logger.info("... %d / %d", i, len(tickers))
-            result = self._check_conditions(code, name, trading_day)
-            if result:
-                result.pop("_df", None)
-                results.append(result)
-                logger.info("조건 만족: %s (%s)", name, code)
+        trading_day = self._latest_trading_day()
+        candidates  = self._pre_filter_tickers(trading_day)
+        logger.info("OHLCV 상세 검사 시작: %d개 후보 (기준일: %s)", len(candidates), trading_day)
+
+        results = self._parallel_scan(candidates, trading_day)
+        for r in results:
+            r.pop("_df", None)
 
         logger.info("스캔 완료 - %d개 종목 발견", len(results))
         return results
 
-    # ── 신규 scan_with_score() ───────────────────
+    # ── scan_with_score() ─────────────────────────
     def scan_with_score(
         self,
         themes: list[ThemeIssue],
@@ -239,19 +339,23 @@ class StockScanner:
             return []
 
         trading_day = self._latest_trading_day()
-        tickers     = self._get_all_tickers(trading_day)
-        logger.info("점수 스캔 시작: %d종목 (기준일: %s)", len(tickers), trading_day)
+        candidates  = self._pre_filter_tickers(trading_day)
+        logger.info("점수 스캔 시작: %d개 후보 (기준일: %s)", len(candidates), trading_day)
+
+        results = self._parallel_scan(candidates, trading_day)
+        logger.info("조건 통과: %d종목 → 수급 조회 시작", len(results))
+
+        if not results:
+            return []
+
+        supply_map = self._parallel_supply(results)
 
         scores: list[StockScore] = []
-        for i, (code, name) in enumerate(tickers):
-            if i % 100 == 0:
-                logger.info("... %d / %d", i, len(tickers))
-            result = self._check_conditions(code, name, trading_day)
-            if not result:
-                continue
-
+        for result in results:
+            code     = result["code"]
             df_ohlcv = result.pop("_df")
-            supply   = fetch_investor_data(code, days=10)
+            supply   = supply_map.get(code, {"foreign_10d": 0.0, "institution_10d": 0.0})
+
             s = score_from_scan(
                 scan_result=result,
                 df_ohlcv=df_ohlcv,
@@ -262,7 +366,7 @@ class StockScanner:
                 sector=get_sector(code),
             )
             scores.append(s)
-            logger.info("조건 만족: %s (%s) — %d점", name, code, s.total)
+            logger.info("점수: %s (%s) — %d점", result["name"], code, s.total)
 
         logger.info("점수 스캔 완료: %d종목", len(scores))
         return rank_scores(scores)
