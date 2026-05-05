@@ -17,6 +17,5 @@ COPY . .
 
 ENV PYTHONUNBUFFERED=1
 ENV TZ=Asia/Seoul
-ENV
 
 CMD ["python", "-u", "bot.py"]
