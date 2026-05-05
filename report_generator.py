@@ -503,15 +503,15 @@ def generate_report(
         story.append(Spacer(1,14))
 
     # ══ SECTION 5: 테마 이슈 (선택) ═══════════════
-       if themes:
-         story.append(section_header(
-             "🔥  SECTION 5  |  오늘의 매크로 테마 이슈",
-             COLOR_GRAY, styles
-         ))
-         story.append(Spacer(1,4))
-         for el in build_theme_section(themes, styles, theme_news_map):
-             story.append(el)
-         story.append(Spacer(1,14))
+    if themes:
+        story.append(section_header(
+            "🔥  SECTION 5  |  오늘의 매크로 테마 이슈",
+            COLOR_GRAY, styles
+        ))
+        story.append(Spacer(1,4))
+        for el in build_theme_section(themes, styles, theme_news_map):
+            story.append(el)
+        story.append(Spacer(1,14))
     # ══ SECTION 6: 핫 키워드 ═══════════════════
     if hot_kw_map:
         story.append(section_header(
