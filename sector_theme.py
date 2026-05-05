@@ -3,6 +3,7 @@ sector_theme.py — 섹터 분류 + 테마 이슈 분류
 Finance-DataReader로 전 종목 섹터 로드 + 뉴스 기반 테마 감지
 """
 
+import json  # 추가
 import logging
 from datetime import datetime
 from dataclasses import dataclass, field

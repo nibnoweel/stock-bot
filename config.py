@@ -24,3 +24,6 @@ SCAN_DELAY     = float(os.environ.get("SCAN_DELAY",   "0.3"))
 REPORT_OUTPUT_DIR     = os.environ.get("REPORT_OUTPUT_DIR", "/tmp")
 SUPPLY_LOOKBACK_DAYS  = int(os.environ.get("SUPPLY_LOOKBACK_DAYS",  "10"))
 SCORE_ALERT_THRESHOLD = int(os.environ.get("SCORE_ALERT_THRESHOLD", "100"))
+
+# ── OpenAI (beta: GPT 동적 테마 감지) ────────────
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")

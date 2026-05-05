@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from scanner import StockScanner
 from news_scanner import NewsScanner, fetch_all_news, build_stock_sentiment_map
 from report_generator import generate_report
-from sector_theme import classify_news_to_themes, count_hot_keywords
+from sector_theme import classify_news_to_themes_with_gpt, count_hot_keywords
 from config import TELEGRAM_TOKEN, CHAT_ID, WEEKDAY_SCAN_TIMES, WEEKEND_SCAN_TIMES
 
 # 모든 로그의 기본 레벨은 INFO로 두되,
@@ -69,7 +69,7 @@ async def run_full_scan(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
 
         # 3. 테마 분류
         news_items = fetch_all_news()
-        themes = classify_news_to_themes(news_items)
+        themes = classify_news_to_themes_with_gpt(news_items)
         logger.info("테마 감지: %d개", len(themes))
 
         # 4. 점수 스캔
@@ -208,7 +208,7 @@ async def cmd_theme(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 테마 분석 중...")
     try:
         news_items = fetch_all_news()
-        themes     = classify_news_to_themes(news_items)
+        themes = classify_news_to_themes_with_gpt(news_items)
         hot_kw     = count_hot_keywords(news_items)
 
         lines = ["🔥 *오늘의 테마 이슈*\n"]
