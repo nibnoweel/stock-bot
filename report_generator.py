@@ -280,8 +280,7 @@ def build_score_section(scores: list, styles: dict) -> list:
     elements.append(tbl)
     return elements
 
-# ── 신규 SECTION 5: 테마 이슈 ────────────────────
-
+# ── SECTION 5: 테마 이슈 ────────────────────
 def build_theme_section(themes: list, styles: dict, theme_news_map: dict = None) -> list:
     elements = []
     if not themes:
@@ -292,12 +291,15 @@ def build_theme_section(themes: list, styles: dict, theme_news_map: dict = None)
 
     for i, t in enumerate(themes[:8], 1):
         dir_color = COLOR_POSITIVE if t.is_bullish else COLOR_NEGATIVE
-        dir_hex   = dir_color.hexval()[1:]
+
+        # ❗ 핵심 수정 부분
+        dir_hex = safe_hex(dir_color)
 
         header_row = [[
             Paragraph(f"{i}.  {t.theme_name}", styles["theme_h"]),
-            Paragraph(f"<font color='#{dir_hex}'>{t.direction}</font>", styles["body"]),
+            Paragraph(f"<font color='{dir_hex}'>{t.direction}</font>", styles["body"]),
         ]]
+
         header_tbl = Table(header_row, colWidths=[130*mm, 36*mm])
         header_tbl.setStyle(TableStyle([
             ("BACKGROUND",(0,0),(-1,-1),COLOR_ACCENT),
@@ -446,6 +448,15 @@ def build_target_price_section(tp_list: list, styles: dict) -> list:
     elements.append(tbl)
     return elements
 
+# ✅ 추가: 안전한 HEX 변환 함수
+def safe_hex(color_obj):
+    raw = color_obj.hexval()
+    if raw.startswith("0x"):
+        return "#" + raw[2:]
+    if raw.startswith("#"):
+        return raw
+    return "#" + raw
+    
 # ── 메인 generate_report (기존 시그니처 완전 유지) ──
 
 def generate_report(
