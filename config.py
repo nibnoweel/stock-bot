@@ -9,8 +9,8 @@ TELEGRAM_BOT_TOKEN = TELEGRAM_TOKEN
 TELEGRAM_CHAT_ID   = CHAT_ID
 
 # ── 스캔 스케줄 (기존 유지) ──────────────────────
-WEEKDAY_SCAN_TIMES = ["08:30", "12:30", "16:00"]
-WEEKEND_SCAN_TIMES = ["08:30", "20:00"]
+WEEKDAY_SCAN_TIMES = ["08:30"]
+WEEKEND_SCAN_TIMES = ["08:30"]
 
 # report_generator / bot.py 에서 쓰는 단일 시간값
 REPORT_TIME = WEEKDAY_SCAN_TIMES[0]   # "08:30"
