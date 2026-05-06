@@ -148,7 +148,7 @@ async def run_full_scan(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
         score_lines = ""
         if scores:
             score_lines = "\n\n🎯 *점수 TOP 3*\n" + "\n".join(
-                f"  {s.name} *{s.total}점* {s.grade().strip()}" for s in scores[:3]
+                f"  {s.name} *{s.total}점* {s.grade.strip()}" for s in scores[:3]
             )
 
         summary = (
