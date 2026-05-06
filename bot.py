@@ -312,8 +312,9 @@ async def post_init(app: Application) -> None:
 # 메인
 # ────────────────────────────────────────────────
 def main():
-    # 시작 시 웹훅 + 이전 세션 강제 초기화
-    import requests
+    import requests, time
+
+    # 웹훅 초기화
     try:
         requests.get(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook",
@@ -323,6 +324,10 @@ def main():
         logger.info("웹훅 초기화 완료")
     except Exception as e:
         logger.warning("웹훅 초기화 실패 (무시): %s", e)
+
+    # 이전 인스턴스 종료 대기 (Railway rolling deploy 대응)
+    logger.info("이전 인스턴스 종료 대기 중... (15초)")
+    time.sleep(15)
 
     app = (
         Application.builder()
