@@ -22,8 +22,8 @@ from sector_theme import get_sector, match_stock_themes, ThemeIssue
 logger = logging.getLogger(__name__)
 
 # 병렬 처리 워커 수
-_OHLCV_WORKERS   = 20   # OHLCV 조회 병렬 수
-_SUPPLY_WORKERS  = 10   # 수급 조회 병렬 수
+_OHLCV_WORKERS   = 10   # OHLCV 조회 병렬 수
+_SUPPLY_WORKERS  = 5   # 수급 조회 병렬 수
 
 # 1차 필터 기준 (StockListing 데이터로 사전 필터링)
 _PRE_FILTER_CHANGE_PCT  = 1.5   # 등락률 최소 (%)  — 여유있게 설정

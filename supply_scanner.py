@@ -23,43 +23,6 @@ _KRX_HEADERS = {
 }
 
 
-def _fetch_krx_investor(code: str, date: str) -> dict:
-    """
-    KRX data.krx.co.kr 에서 투자자별 순매수 조회
-    반환: {"외국인": int, "기관합계": int, "개인": int}  단위: 주
-    """
-    params = {
-        "bld":        "dbms/MDC/STAT/standard/MDCSTAT02202",
-        "mktId":      "ALL",
-        "trdDd":      date,
-        "isuCd":      code,
-        "money":      "1",      # 1=주식수
-        "csvxls_isNo": "false",
-    }
-    try:
-        resp = requests.post(_KRX_INVESTOR_URL, data=params,
-                             headers=_KRX_HEADERS, timeout=10)
-        data = resp.json()
-        rows = data.get("output", [])
-        result = {"외국인": 0, "기관합계": 0, "개인": 0}
-        for row in rows:
-            investor = row.get("INVST_TP_NM", "")
-            try:
-                val = int(str(row.get("NETBID_TRDVOL", "0")).replace(",", "").replace("-", "-"))
-            except Exception:
-                val = 0
-            if "외국인" in investor:
-                result["외국인"] += val
-            elif "기관" in investor:
-                result["기관합계"] += val
-            elif "개인" in investor:
-                result["개인"] += val
-        return result
-    except Exception as e:
-        logger.debug("KRX 투자자 API 실패 %s %s: %s", code, date, e)
-        return {"외국인": 0, "기관합계": 0, "개인": 0}
-
-
 def _trading_dates(days: int) -> list[str]:
     """최근 N 거래일 날짜 리스트 (주말 제외)"""
     dates = []
@@ -73,38 +36,65 @@ def _trading_dates(days: int) -> list[str]:
 
 def fetch_investor_data(code: str, days: int = 10) -> dict:
     """
-    외인 / 기관 / 개인 10일 순매수 반환
-    반환: {
-        "foreign_10d":      float (만주),
-        "institution_10d":  float (만주),
-        "individual_10d":   float (만주),
-        "foreign_series":   pd.Series,
-        "institution_series": pd.Series,
-    }
+    KRX API 단일 호출로 기간 합산 수급 조회
+    날짜별 루프(10번) → 기간 조회(1번)으로 변경
     """
-    dates = _trading_dates(days)
+    end   = datetime.now()
+    start = end - timedelta(days=days * 2)  # 주말 여유분
+    start_str = start.strftime("%Y%m%d")
+    end_str   = end.strftime("%Y%m%d")
 
-    foreign_list     = []
-    institution_list = []
-    individual_list  = []
-
-    for date in dates:
-        row = _fetch_krx_investor(code, date)
-        foreign_list.append(row["외국인"])
-        institution_list.append(row["기관합계"])
-        individual_list.append(row["개인"])
-
-    f_series   = pd.Series(foreign_list)
-    i_series   = pd.Series(institution_list)
-    ind_series = pd.Series(individual_list)
-
-    return {
-        "foreign_10d":        round(f_series.sum()   / 10000, 1),
-        "institution_10d":    round(i_series.sum()   / 10000, 1),
-        "individual_10d":     round(ind_series.sum() / 10000, 1),
-        "foreign_series":     f_series,
-        "institution_series": i_series,
+    params = {
+        "bld":         "dbms/MDC/STAT/standard/MDCSTAT02203",  # 기간별 투자자
+        "mktId":       "ALL",
+        "strtDd":      start_str,
+        "endDd":       end_str,
+        "isuCd":       code,
+        "money":       "1",
+        "csvxls_isNo": "false",
     }
+
+    empty = {
+        "foreign_10d": 0.0, "institution_10d": 0.0, "individual_10d": 0.0,
+        "foreign_series": pd.Series(dtype=float),
+        "institution_series": pd.Series(dtype=float),
+    }
+
+    try:
+        resp = requests.post(
+            _KRX_INVESTOR_URL, data=params,
+            headers=_KRX_HEADERS, timeout=10
+        )
+        data = resp.json()
+        rows = data.get("output", [])
+        if not rows:
+            return empty
+
+        f_total = i_total = ind_total = 0
+        for row in rows:
+            investor = row.get("INVST_TP_NM", "")
+            try:
+                val = int(str(row.get("NETBID_TRDVOL", "0")).replace(",", ""))
+            except Exception:
+                val = 0
+            if "외국인" in investor:
+                f_total += val
+            elif "기관" in investor:
+                i_total += val
+            elif "개인" in investor:
+                ind_total += val
+
+        return {
+            "foreign_10d":        round(f_total   / 10000, 1),
+            "institution_10d":    round(i_total   / 10000, 1),
+            "individual_10d":     round(ind_total / 10000, 1),
+            "foreign_series":     pd.Series([f_total]),
+            "institution_series": pd.Series([i_total]),
+        }
+
+    except Exception as e:
+        logger.debug("KRX 수급 API 실패 %s: %s", code, e)
+        return empty
 
 
 def supply_arrow(val: float) -> str:
