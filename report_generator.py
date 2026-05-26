@@ -7,6 +7,8 @@ report_generator.py (업그레이드)
 
 import os
 import logging
+import glob
+
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -22,8 +24,16 @@ from reportlab.pdfbase.ttfonts import TTFont
 logger = logging.getLogger(__name__)
 
 FONT_DIR     = "/usr/share/fonts/truetype/nanum"
-FONT_REGULAR = os.path.join(FONT_DIR, "NanumGothic.ttf")
-FONT_BOLD    = os.path.join(FONT_DIR, "NanumGothicBold.ttf")
+FONT_REGULAR = _find_font([
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumMyeongjo.ttf",
+])
+FONT_BOLD = _find_font([
+    "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumBarunGothicBold.ttf",
+    FONT_REGULAR,  # Bold 없으면 Regular로 fallback
+])
 
 # 기존 색상 (유지)
 COLOR_PRIMARY  = colors.HexColor("#1A237E")
@@ -41,14 +51,26 @@ COLOR_SCORE_HI = colors.HexColor("#E65100")   # 120점+
 COLOR_SCORE_MD = colors.HexColor("#1A6FB5")   # 90점+
 COLOR_BLUE_BG  = colors.HexColor("#E3F2FD")
 
+def _find_font(candidates):
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
 
 def register_fonts():
+    if not FONT_REGULAR:
+        # 설치된 폰트 목록 로그로 출력 (디버깅용)
+        for f in glob.glob("/usr/share/fonts/**/*.ttf", recursive=True):
+            logger.info("설치된 폰트: %s", f)
+        logger.warning("나눔폰트를 찾을 수 없습니다. Helvetica로 대체합니다.")
+        return False
     try:
         pdfmetrics.registerFont(TTFont("NanumGothic", FONT_REGULAR))
-        pdfmetrics.registerFont(TTFont("NanumGothicBold", FONT_BOLD))
+        pdfmetrics.registerFont(TTFont("NanumGothicBold", FONT_BOLD or FONT_REGULAR))
+        logger.info("폰트 등록 성공: %s", FONT_REGULAR)
         return True
     except Exception as e:
-        logger.warning("나눔폰트 로드 실패: %s", str(e))
+        logger.warning("폰트 등록 실패: %s", e)
         return False
 
 
