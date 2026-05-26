@@ -90,7 +90,7 @@ async def run_full_scan(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
             if overbought or oversold:
                 alert_lines = ["⚠️ *3스토 신호 감지*\n"]
                 if overbought:
-                    alert_lines.append("🔴 *과매수 (매도 주의)*")
+                    alert_lines.append("🔴 *과매수 (매도 주의!!)*")
                     for s in overbought[:5]:
                         alert_lines.append(
                             f"  {s.name} | RSI {s.rsi:.0f} | "
