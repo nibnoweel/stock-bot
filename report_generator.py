@@ -23,6 +23,12 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 logger = logging.getLogger(__name__)
 
+def _find_font(candidates):
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
 FONT_DIR     = "/usr/share/fonts/truetype/nanum"
 FONT_REGULAR = _find_font([
     "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
@@ -50,12 +56,6 @@ COLOR_DIVIDER  = colors.HexColor("#CFD8DC")
 COLOR_SCORE_HI = colors.HexColor("#E65100")   # 120점+
 COLOR_SCORE_MD = colors.HexColor("#1A6FB5")   # 90점+
 COLOR_BLUE_BG  = colors.HexColor("#E3F2FD")
-
-def _find_font(candidates):
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return None
 
 def register_fonts():
     if not FONT_REGULAR:

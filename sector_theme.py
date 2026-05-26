@@ -22,23 +22,12 @@ logger = logging.getLogger(__name__)
 _SECTOR_CACHE: dict[str, str] = {}
 
 def load_sector_map() -> dict[str, str]:
-    """Finance-DataReader(FDR)로 KOSPI + KOSDAQ 전 종목 및 섹터 로드"""
+    """MANUAL_SECTOR만 사용 (FDR은 Sector 컬럼 미제공)"""
     global _SECTOR_CACHE
     if _SECTOR_CACHE:
         return _SECTOR_CACHE
-    try:
-        df_krx = fdr.StockListing('KRX')
-        result = {}
-        for _, row in df_krx.iterrows():
-            code = row['Code']
-            sector = row['Sector'] if pd.notna(row['Sector']) else "기타"
-            result[code] = sector
-        if result:
-            _SECTOR_CACHE = result
-            logger.info("FDR 섹터 매핑 로드 완료: %d개", len(result))
-            return _SECTOR_CACHE
-    except Exception as e:
-        logger.error("FDR 섹터 로드 중 에러 발생: %s", e)
+    _SECTOR_CACHE = MANUAL_SECTOR.copy()
+    logger.info("섹터 매핑 로드: %d개 (수동)", len(_SECTOR_CACHE))
     return _SECTOR_CACHE
 
 MANUAL_SECTOR: dict[str, str] = {
