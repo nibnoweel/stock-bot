@@ -59,28 +59,40 @@ async def run_full_scan(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
     try:
         trading_day = scanner._latest_trading_day()
 
-        # 1. 기존 주식 스캔
-        stock_results = scanner.scan()
-        logger.info("주식 스캔 완료: %d종목", len(stock_results))
-
-        # 2. 기존 뉴스 스캔
+        # 1. 뉴스 스캔
         positive_news, negative_news = news_scanner.scan()
         logger.info("뉴스 스캔 완료: 긍정 %d, 부정 %d", len(positive_news), len(negative_news))
 
-        # 3. 테마 분류
+        # 2. 테마 분류
         news_items = fetch_all_news()
-        themes = classify_news_to_themes_with_gpt(news_items)
+        themes = classify_news_to_themes(news_items)
         logger.info("테마 감지: %d개", len(themes))
 
-        # 4. 점수 스캔
-        scores = None
-        if stock_results:
-            sentiment_map = build_stock_sentiment_map(news_items)
-            scores = scanner.scan_with_score(
-                themes=themes,
-                news_sentiment_map=sentiment_map,
-            )
-            logger.info("점수 계산 완료: %d종목", len(scores) if scores else 0)
+        # 3. 스캔 + 점수 (한 번만 실행)
+        sentiment_map = build_stock_sentiment_map(news_items)
+        scores = scanner.scan_with_score(
+            themes=themes,
+            news_sentiment_map=sentiment_map,
+        )
+        logger.info("스캔 완료: %d종목", len(scores) if scores else 0)
+
+        # stock_results는 scores에서 추출 (scanner.scan() 별도 호출 제거)
+        stock_results = [
+            {
+                "code":         s.code,
+                "name":         s.name,
+                "close":        s.close,
+                "change_pct":   s.change_pct,
+                "volume_ratio": s.volume_ratio,
+                "ma200_gap":    s.ma200_gap,
+                "rsi":          s.rsi,
+                "rsi_status":   s.rsi_status,
+                "divergence":   s.divergence,
+                "golden_cross": s.golden_cross,
+                "hist_positive":s.hist_positive,
+            }
+            for s in (scores or [])
+        ]
 
         # 3스토 과열 알림
         if scores:

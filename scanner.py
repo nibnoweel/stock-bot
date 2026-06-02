@@ -218,6 +218,10 @@ class StockScanner:
         return False
 
     # ── 조건 검사 ────────────────────────────────
+    # 필터 1 — 거래량 2배
+    # 필터 2 — 전일 대비 2% 이상 상승
+    # 필터 3 — 200일 이동평균선 +3% 이상, 5일 연속
+    # 필터 4 — 캔들 패턴 (윗꼬리 < 몸통 && 윗꼬리 < 아랫꼬리)
     def _check_conditions(self, code, name, end_date):
         try:
             df = self._get_ohlcv(code, end_date, days=300)
