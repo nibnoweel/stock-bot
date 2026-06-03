@@ -70,6 +70,7 @@ class StockScore:
     divergence:       str   = "없음"
     golden_cross:     bool  = False
     hist_positive:    bool  = False
+    rsi_status:       str   = "중립"   # ← 추가
 
     stoch_short_signal: str = "-"
     stoch_mid_signal:   str = "-"
