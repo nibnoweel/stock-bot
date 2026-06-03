@@ -20,10 +20,6 @@ from reportlab.platypus import (
 )
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-
-# CID 폰트 등록 (한글 완벽 지원)
-pdfmetrics.registerFont(UnicodeCIDFont("HYSMyeongJoStd-Medium"))
 
 logger = logging.getLogger(__name__)
 
@@ -61,20 +57,18 @@ COLOR_SCORE_HI = colors.HexColor("#E65100")   # 120점+
 COLOR_SCORE_MD = colors.HexColor("#1A6FB5")   # 90점+
 COLOR_BLUE_BG  = colors.HexColor("#E3F2FD")
 
-def register_fonts():
-    if not FONT_REGULAR:
-        # 설치된 폰트 목록 로그로 출력 (디버깅용)
-        for f in glob.glob("/usr/share/fonts/**/*.ttf", recursive=True):
-            logger.info("설치된 폰트: %s", f)
-        logger.warning("나눔폰트를 찾을 수 없습니다. Helvetica로 대체합니다.")
+def register_fonts() -> bool:
+    regular = _find_font(REGULAR_CANDIDATES)
+    bold    = _find_font(BOLD_CANDIDATES)
+    logger.info("폰트 등록 성공 — Regular: %s / Bold: %s", regular, bold)
+
+    if not regular:
+        logger.warning("나눔폰트를 찾을 수 없습니다.")
         return False
     try:
-        from reportlab.pdfbase.ttfonts import TTFont
-        from reportlab.lib.fonts import addMapping
-
-        pdfmetrics.registerFont(TTFont("NanumGothic",     FONT_REGULAR, subfontIndex=0))
-        pdfmetrics.registerFont(TTFont("NanumGothicBold", FONT_BOLD or FONT_REGULAR, subfontIndex=0))
-
+        # encoding 명시 — 한글 유니코드 매핑 강제 적용
+        pdfmetrics.registerFont(TTFont("NanumGothic",     regular, validate=True))
+        pdfmetrics.registerFont(TTFont("NanumGothicBold", bold or regular, validate=True))
         pdfmetrics.registerFontFamily(
             "NanumGothic",
             normal="NanumGothic",
@@ -82,7 +76,6 @@ def register_fonts():
             italic="NanumGothic",
             boldItalic="NanumGothicBold",
         )
-        logger.info("폰트 등록 성공 — Regular: %s / Bold: %s", FONT_REGULAR, FONT_BOLD)
         return True
     except Exception as e:
         logger.warning("폰트 등록 실패: %s", e)
@@ -510,10 +503,6 @@ def generate_report(
     tp_list=None,       # 신규: 목표주가 변동
 ):
     has_font = register_fonts()
-    if not has_font:
-        # TTF 실패 시 CID 폰트로 폴백
-        pdfmetrics.registerFont(UnicodeCIDFont("HYSMyeongJoStd-Medium"))
-        FONT_NAME = "HYSMyeongJoStd-Medium"
     styles   = get_styles(has_font)
     logger.info("generate_report has_font=%s", has_font)
     doc = SimpleDocTemplate(
