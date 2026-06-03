@@ -20,6 +20,10 @@ from reportlab.platypus import (
 )
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+# CID 폰트 등록 (한글 완벽 지원)
+pdfmetrics.registerFont(UnicodeCIDFont("HYSMyeongJoStd-Medium"))
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +90,8 @@ def register_fonts():
 
 
 def get_styles(has_font):
-    f  = "NanumGothic"     if has_font else "Helvetica"
-    fb = "NanumGothicBold" if has_font else "Helvetica-Bold"
+    f  = "NanumGothic"        if has_font else "HYSMyeongJoStd-Medium"
+    fb = "NanumGothicBold"    if has_font else "HYSMyeongJoStd-Medium"
     logger.info("스타일 폰트 적용: has_font=%s, f=%s, fb=%s", has_font, f, fb)
     base = {
         "title":      ParagraphStyle("title",      fontName=fb, fontSize=22, textColor=COLOR_PRIMARY, spaceAfter=4, leading=28),
@@ -506,6 +510,10 @@ def generate_report(
     tp_list=None,       # 신규: 목표주가 변동
 ):
     has_font = register_fonts()
+    if not has_font:
+        # TTF 실패 시 CID 폰트로 폴백
+        pdfmetrics.registerFont(UnicodeCIDFont("HYSMyeongJoStd-Medium"))
+        FONT_NAME = "HYSMyeongJoStd-Medium"
     styles   = get_styles(has_font)
     logger.info("generate_report has_font=%s", has_font)
     doc = SimpleDocTemplate(
