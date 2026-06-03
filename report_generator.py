@@ -29,17 +29,19 @@ def _find_font(candidates):
             return path
     return None
 
-FONT_DIR     = "/usr/share/fonts/truetype/nanum"
-FONT_REGULAR = _find_font([
+REGULAR_CANDIDATES = [
     "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
     "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf",
     "/usr/share/fonts/truetype/nanum/NanumMyeongjo.ttf",
-])
-FONT_BOLD = _find_font([
+]
+BOLD_CANDIDATES = [
     "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
     "/usr/share/fonts/truetype/nanum/NanumBarunGothicBold.ttf",
-    FONT_REGULAR,  # Bold 없으면 Regular로 fallback
-])
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+]
+
+FONT_REGULAR = _find_font(REGULAR_CANDIDATES)
+FONT_BOLD    = _find_font(BOLD_CANDIDATES)
 
 # 기존 색상 (유지)
 COLOR_PRIMARY  = colors.HexColor("#1A237E")
