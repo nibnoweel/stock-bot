@@ -65,8 +65,19 @@ def register_fonts():
         logger.warning("나눔폰트를 찾을 수 없습니다. Helvetica로 대체합니다.")
         return False
     try:
-        pdfmetrics.registerFont(TTFont("NanumGothic", FONT_REGULAR))
-        pdfmetrics.registerFont(TTFont("NanumGothicBold", FONT_BOLD or FONT_REGULAR))
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.lib.fonts import addMapping
+
+        pdfmetrics.registerFont(TTFont("NanumGothic",     FONT_REGULAR, subfontIndex=0))
+        pdfmetrics.registerFont(TTFont("NanumGothicBold", FONT_BOLD or FONT_REGULAR, subfontIndex=0))
+
+        pdfmetrics.registerFontFamily(
+            "NanumGothic",
+            normal="NanumGothic",
+            bold="NanumGothicBold",
+            italic="NanumGothic",
+            boldItalic="NanumGothicBold",
+        )
         logger.info("폰트 등록 성공 — Regular: %s / Bold: %s", FONT_REGULAR, FONT_BOLD)
         return True
     except Exception as e:
