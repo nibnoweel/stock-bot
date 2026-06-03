@@ -67,7 +67,7 @@ def register_fonts():
     try:
         pdfmetrics.registerFont(TTFont("NanumGothic", FONT_REGULAR))
         pdfmetrics.registerFont(TTFont("NanumGothicBold", FONT_BOLD or FONT_REGULAR))
-        logger.info("폰트 등록 성공: %s", FONT_REGULAR)
+        logger.info("폰트 등록 성공 — Regular: %s / Bold: %s", FONT_REGULAR, FONT_BOLD)
         return True
     except Exception as e:
         logger.warning("폰트 등록 실패: %s", e)
