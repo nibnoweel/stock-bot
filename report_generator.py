@@ -77,6 +77,7 @@ def register_fonts():
 def get_styles(has_font):
     f  = "NanumGothic"     if has_font else "Helvetica"
     fb = "NanumGothicBold" if has_font else "Helvetica-Bold"
+    logger.info("스타일 폰트 적용: has_font=%s, f=%s, fb=%s", has_font, f, fb)
     base = {
         "title":      ParagraphStyle("title",      fontName=fb, fontSize=22, textColor=COLOR_PRIMARY, spaceAfter=4, leading=28),
         "subtitle":   ParagraphStyle("subtitle",   fontName=f,  fontSize=10, textColor=COLOR_GRAY, spaceAfter=2),
@@ -495,7 +496,7 @@ def generate_report(
 ):
     has_font = register_fonts()
     styles   = get_styles(has_font)
-
+    logger.info("generate_report has_font=%s", has_font)
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
         topMargin=15*mm, bottomMargin=15*mm,
