@@ -9,8 +9,8 @@ TELEGRAM_BOT_TOKEN = TELEGRAM_TOKEN
 TELEGRAM_CHAT_ID   = CHAT_ID
 
 # ── 스캔 스케줄 (기존 유지) ──────────────────────
-WEEKDAY_SCAN_TIMES = ["08:30", "12:30", "16:00"]
-WEEKEND_SCAN_TIMES = ["08:30", "20:00"]
+WEEKDAY_SCAN_TIMES = ["08:30"]
+WEEKEND_SCAN_TIMES = ["08:30"]
 
 # report_generator / bot.py 에서 쓰는 단일 시간값
 REPORT_TIME = WEEKDAY_SCAN_TIMES[0]   # "08:30"
@@ -24,3 +24,6 @@ SCAN_DELAY     = float(os.environ.get("SCAN_DELAY",   "0.3"))
 REPORT_OUTPUT_DIR     = os.environ.get("REPORT_OUTPUT_DIR", "/tmp")
 SUPPLY_LOOKBACK_DAYS  = int(os.environ.get("SUPPLY_LOOKBACK_DAYS",  "10"))
 SCORE_ALERT_THRESHOLD = int(os.environ.get("SCORE_ALERT_THRESHOLD", "100"))
+
+# ── OpenAI (beta: GPT 동적 테마 감지) ────────────
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")

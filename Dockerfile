@@ -1,7 +1,8 @@
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-nanum \
+    fonts-nanum-extra \
     tzdata \
     && ln -sf /usr/share/zoneinfo/Asia/Seoul /etc/localtime \
     && echo "Asia/Seoul" > /etc/timezone \

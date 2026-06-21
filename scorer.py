@@ -66,21 +66,26 @@ class StockScore:
     change_pct:       float = 0.0
     volume_ratio:     float = 0.0
     ma200_gap:        float = 0.0
+    market_cap:       float = 0.0   # 시가총액 (억원), 신규 추가
     divergence:       str   = "없음"
     golden_cross:     bool  = False
     hist_positive:    bool  = False
+    rsi_status:       str   = "중립"   # ← 추가
 
     stoch_short_signal: str = "-"
     stoch_mid_signal:   str = "-"
-
     sector: str = "기타"
+
+    # 3스토 과열 신호
+    triple_overbought:  bool = False   # 단기+중기 스토 + RSI 동시 과매수
+    triple_oversold:    bool = False   # 단기+중기 스토 + RSI 동시 과매도 (매수 기회)
 
     @property
     def total(self) -> int:
         return (self.rsi_score + self.stoch_score + self.macd_score
                 + self.foreign_score + self.institution_score
                 + self.news_score + self.theme_score + self.price_score)
-
+    @property
     def grade(self) -> str:
         t = self.total
         if t >= 120: return "★★★ 강매수"
@@ -89,7 +94,22 @@ class StockScore:
         if t >= 30:  return "    중립"
         return              "    회피"
 
+    @property
+    def cap_label(self) -> str:
+        """시총 구간 레이블"""
+        c = self.market_cap
+        if c <= 0:       return "-"
+        if c >= 100000:  return "대형 (10조↑)"
+        if c >= 10000:   return "중형 (1~10조)"
+        if c >= 3000:    return "중소형 (3천억~1조)"
+        return                  "소형 (3천억↓)"
 
+    @property
+    def stoch_alert(self) -> str:
+        """3스토 신호 레이블 (리포트/알림용)"""
+        if self.triple_overbought: return "🔴 3스토과매수"
+        if self.triple_oversold:   return "🟢 3스토과매도"
+        return ""
 # ────────────────────────────────────────────────
 # 채점 함수
 # ────────────────────────────────────────────────
@@ -159,6 +179,10 @@ def score_from_scan(
     elif 30 < sk <= 50 and sk > s.stoch_d_short: s.stoch_score = 12
     elif sk >= 80:              s.stoch_score = 3
     else:                       s.stoch_score = 8
+
+    # 3스토 과열/침체 판정
+    s.triple_overbought = (sk >= 80 and mk >= 80 and s.rsi >= 70)
+    s.triple_oversold   = (sk <= 20 and mk <= 20 and s.rsi <= 30)
 
     # ── 3. MACD (15점) ────────────────────────
     if s.golden_cross and s.hist_positive: s.macd_score = 15

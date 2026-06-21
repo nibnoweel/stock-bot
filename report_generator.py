@@ -7,6 +7,8 @@ report_generator.py (업그레이드)
 
 import os
 import logging
+import glob
+
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -21,9 +23,25 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 logger = logging.getLogger(__name__)
 
-FONT_DIR     = "/usr/share/fonts/truetype/nanum"
-FONT_REGULAR = os.path.join(FONT_DIR, "NanumGothic.ttf")
-FONT_BOLD    = os.path.join(FONT_DIR, "NanumGothicBold.ttf")
+def _find_font(candidates):
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+REGULAR_CANDIDATES = [
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumMyeongjo.ttf",
+]
+BOLD_CANDIDATES = [
+    "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumBarunGothicBold.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+]
+
+FONT_REGULAR = _find_font(REGULAR_CANDIDATES)
+FONT_BOLD    = _find_font(BOLD_CANDIDATES)
 
 # 기존 색상 (유지)
 COLOR_PRIMARY  = colors.HexColor("#1A237E")
@@ -41,20 +59,35 @@ COLOR_SCORE_HI = colors.HexColor("#E65100")   # 120점+
 COLOR_SCORE_MD = colors.HexColor("#1A6FB5")   # 90점+
 COLOR_BLUE_BG  = colors.HexColor("#E3F2FD")
 
+def register_fonts() -> bool:
+    regular = _find_font(REGULAR_CANDIDATES)
+    bold    = _find_font(BOLD_CANDIDATES)
+    logger.info("폰트 등록 성공 — Regular: %s / Bold: %s", regular, bold)
 
-def register_fonts():
+    if not regular:
+        logger.warning("나눔폰트를 찾을 수 없습니다.")
+        return False
     try:
-        pdfmetrics.registerFont(TTFont("NanumGothic", FONT_REGULAR))
-        pdfmetrics.registerFont(TTFont("NanumGothicBold", FONT_BOLD))
+        # encoding 명시 — 한글 유니코드 매핑 강제 적용
+        pdfmetrics.registerFont(TTFont("NanumGothic",     regular, validate=True))
+        pdfmetrics.registerFont(TTFont("NanumGothicBold", bold or regular, validate=True))
+        pdfmetrics.registerFontFamily(
+            "NanumGothic",
+            normal="NanumGothic",
+            bold="NanumGothicBold",
+            italic="NanumGothic",
+            boldItalic="NanumGothicBold",
+        )
         return True
     except Exception as e:
-        logger.warning("나눔폰트 로드 실패: %s", str(e))
+        logger.warning("폰트 등록 실패: %s", e)
         return False
 
 
 def get_styles(has_font):
-    f  = "NanumGothic"     if has_font else "Helvetica"
-    fb = "NanumGothicBold" if has_font else "Helvetica-Bold"
+    f  = "NanumGothic"        if has_font else "HYSMyeongJoStd-Medium"
+    fb = "NanumGothicBold"    if has_font else "HYSMyeongJoStd-Medium"
+    logger.info("스타일 폰트 적용: has_font=%s, f=%s, fb=%s", has_font, f, fb)
     base = {
         "title":      ParagraphStyle("title",      fontName=fb, fontSize=22, textColor=COLOR_PRIMARY, spaceAfter=4, leading=28),
         "subtitle":   ParagraphStyle("subtitle",   fontName=f,  fontSize=10, textColor=COLOR_GRAY, spaceAfter=2),
@@ -222,7 +255,7 @@ def _score_color(score: int) -> colors.Color:
 
 
 def build_score_section(scores: list, styles: dict) -> list:
-    """SECTION 4: 점수 랭킹 테이블"""
+    """SECTION 4: 점수 랭킹 테이블 (3스토 과열 신호 포함)"""
     elements = []
     if not scores:
         elements.append(Paragraph("점수 산출 종목 없음", styles["body"]))
@@ -231,19 +264,19 @@ def build_score_section(scores: list, styles: dict) -> list:
     f  = "NanumGothic"     if "NanumGothic"    in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica"
     fb = "NanumGothicBold" if "NanumGothicBold" in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica-Bold"
 
-    headers = ["종목명", "섹터", "외인10일", "기관10일", "RSI",
-               "단기스토", "중기스토", "점수", "등급"]
-    col_w   = [28*mm, 24*mm, 18*mm, 18*mm, 12*mm, 20*mm, 20*mm, 14*mm, 18*mm]
+    headers = ["종목명", "시총", "섹터", "외인10일", "기관10일", "RSI",
+               "단기스토", "중기스토", "점수", "등급", "신호"]
+    col_w   = [24*mm, 15*mm, 18*mm, 15*mm, 15*mm, 10*mm, 17*mm, 17*mm, 12*mm, 14*mm, 17*mm]
 
     table_data = [headers]
     for s in scores:
         f_txt, f_sty = _supply_fmt(s.foreign_10d)
         i_txt, i_sty = _supply_fmt(s.institution_10d)
         sc = s.total
-        sc_color = _score_color(sc)
 
         table_data.append([
             s.name,
+            s.cap_label if hasattr(s, "cap_label") else "-",
             s.sector,
             f_txt,
             i_txt,
@@ -251,7 +284,8 @@ def build_score_section(scores: list, styles: dict) -> list:
             f"{s.stoch_k_short:.0f} {s.stoch_short_signal}",
             f"{s.stoch_k_mid:.0f} {s.stoch_mid_signal}",
             f"{sc}점",
-            s.grade().strip(),
+            s.grade.strip(),
+            s.stoch_alert if hasattr(s, "stoch_alert") else "",
         ])
 
     tbl = Table(table_data, colWidths=col_w, repeatRows=1)
@@ -268,29 +302,37 @@ def build_score_section(scores: list, styles: dict) -> list:
         ("BOTTOMPADDING",(0,0),(-1,-1),4),
         ("LEFTPADDING",  (0,0),(-1,-1),4),
     ]))
+
+    # 3스토 과열/침체 행 배경색 강조 (헤더=0번째 행 제외, 1번째부터)
+    for idx, s in enumerate(scores, 1):
+        if hasattr(s, "triple_overbought") and s.triple_overbought:
+            tbl.setStyle(TableStyle([("BACKGROUND", (0, idx), (-1, idx), COLOR_NEG_BG)]))
+        elif hasattr(s, "triple_oversold") and s.triple_oversold:
+            tbl.setStyle(TableStyle([("BACKGROUND", (0, idx), (-1, idx), COLOR_POS_BG)]))
+
     elements.append(tbl)
     return elements
 
-
-# ── 신규 SECTION 5: 테마 이슈 ────────────────────
-
-def build_theme_section(themes: list, styles: dict) -> list:
+# ── SECTION 5: 테마 이슈 ────────────────────
+def build_theme_section(themes: list, styles: dict, theme_news_map: dict = None) -> list:
     elements = []
     if not themes:
         elements.append(Paragraph("감지된 테마 이슈 없음", styles["body"]))
         return elements
 
+    theme_news_map = theme_news_map or {}
+
     for i, t in enumerate(themes[:8], 1):
         dir_color = COLOR_POSITIVE if t.is_bullish else COLOR_NEGATIVE
-        dir_hex   = dir_color.hexval()[1:]
+
+        # ❗ 핵심 수정 부분
+        dir_hex = safe_hex(dir_color)
 
         header_row = [[
             Paragraph(f"{i}.  {t.theme_name}", styles["theme_h"]),
-            Paragraph(
-                f"<font color='#{dir_hex}'>{t.direction}</font>",
-                styles["body"]
-            ),
+            Paragraph(f"<font color='{dir_hex}'>{t.direction}</font>", styles["body"]),
         ]]
+
         header_tbl = Table(header_row, colWidths=[130*mm, 36*mm])
         header_tbl.setStyle(TableStyle([
             ("BACKGROUND",(0,0),(-1,-1),COLOR_ACCENT),
@@ -301,10 +343,21 @@ def build_theme_section(themes: list, styles: dict) -> list:
         ]))
         elements.append(header_tbl)
 
+        # 출처별 건수 집계
+        headlines = theme_news_map.get(t.theme_name, [])
+        source_counts: dict[str, int] = {}
+        for h in headlines:
+            src = h.get("source", "")
+            source_counts[src] = source_counts.get(src, 0) + 1
+        source_str = "  ".join(
+            f"{src} {cnt}건" for src, cnt in
+            sorted(source_counts.items(), key=lambda x: x[1], reverse=True)
+        )
+
         detail_rows = [
             ["감지 키워드:", "  ".join(t.matched_keywords)],
             ["관련 섹터:",   "  ".join(t.related_sectors)],
-            ["뉴스 건수:",   f"{t.news_count}건"],
+            ["뉴스 출처:",   source_str if source_str else f"{t.news_count}건"],
         ]
         d_tbl = Table(detail_rows, colWidths=[25*mm, 141*mm])
         d_tbl.setStyle(TableStyle([
@@ -316,11 +369,127 @@ def build_theme_section(themes: list, styles: dict) -> list:
             ("BOTTOMPADDING",(0,0),(-1,-1),2),
         ]))
         elements.append(d_tbl)
-        elements.append(Spacer(1,5))
+
+        # 관련 헤드라인 출력
+        if headlines:
+            elements.append(Spacer(1, 2))
+            for h in headlines:
+                date   = h.get("date", "")
+                source = h.get("source", "")
+                title  = h.get("title", "")
+                label  = f"[{source}] {date}  {title}"
+                if len(label) > 80:
+                    label = label[:79] + "…"
+                elements.append(Paragraph(f"  • {label}", styles["news_item"]))
+
+        elements.append(Spacer(1, 6))
 
     return elements
 
+# ── SECTION 6: 핫 키워드 TOP N — 출처 건수 + 헤드라인 ────────────────────
+def build_hot_keywords_section(hot_kw_map: list, styles: dict) -> list:
+    """SECTION 6: 핫 키워드 TOP N — 출처 건수 + 헤드라인"""
+    elements = []
+    if not hot_kw_map:
+        elements.append(Paragraph("핫 키워드 없음", styles["body"]))
+        return elements
 
+    for rank, item in enumerate(hot_kw_map, 1):
+        kw      = item["keyword"]
+        total   = item["total"]
+        by_src  = item["by_source"]
+        lines   = item["headlines"]
+
+        # 출처별 건수 문자열
+        src_str = "  ".join(
+            f"{src} {cnt}건"
+            for src, cnt in sorted(by_src.items(), key=lambda x: x[1], reverse=True)
+        )
+
+        header_row = [[
+            Paragraph(f"#{rank}  {kw}  {total}건", styles["theme_h"]),
+            Paragraph(src_str, styles["cell"]),
+        ]]
+        h_tbl = Table(header_row, colWidths=[50*mm, 116*mm])
+        h_tbl.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,-1),COLOR_GOLD_BG),
+            ("TOPPADDING",(0,0),(-1,-1),4),
+            ("BOTTOMPADDING",(0,0),(-1,-1),4),
+            ("LEFTPADDING",(0,0),(-1,-1),8),
+            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ]))
+        elements.append(h_tbl)
+
+        for h in lines:
+            date   = h.get("date", "")
+            source = h.get("source", "")
+            title  = h.get("title", "")
+            label  = f"[{source}] {date}  {title}"
+            if len(label) > 80:
+                label = label[:79] + "…"
+            elements.append(Paragraph(f"  • {label}", styles["news_item"]))
+
+        elements.append(Spacer(1, 5))
+
+    return elements
+
+def build_target_price_section(tp_list: list, styles: dict) -> list:
+    """SECTION 7: 증권사 목표주가 변동"""
+    elements = []
+    if not tp_list:
+        elements.append(Paragraph("수집된 목표주가 변동 없음", styles["body"]))
+        return elements
+
+    f  = "NanumGothic"     if "NanumGothic"    in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica"
+    fb = "NanumGothicBold" if "NanumGothicBold" in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica-Bold"
+
+    headers = ["방향", "종목명", "목표주가", "증권사", "핵심요약", "날짜"]
+    col_w   = [14*mm, 28*mm, 22*mm, 22*mm, 70*mm, 14*mm]
+
+    table_data = [headers]
+    for item in tp_list:
+        direction = item.get("direction", "유지")
+        icon = {"상향": "🔺 상향", "하향": "🔻 하향", "신규": "🆕 신규"}.get(direction, "— 유지")
+        target = f"{item['target']:,}원" if item.get("target") else "-"
+        gap    = f"+{item['gap_pct']:.1f}%" if item.get("gap_pct") else "-"
+
+        table_data.append([
+            icon,
+            item.get("name", "-"),
+            target,
+            item.get("firm", "-"),
+            item.get("summary", "-")[:40],
+            item.get("date", "-"),
+        ])
+
+    tbl = Table(table_data, colWidths=col_w, repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0),(-1,0), COLOR_PRIMARY),
+        ("TEXTCOLOR",     (0,0),(-1,0), colors.white),
+        ("FONTNAME",      (0,0),(-1,0), fb),
+        ("FONTSIZE",      (0,0),(-1,-1), 8),
+        ("FONTNAME",      (0,1),(-1,-1), f),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.white, COLOR_BLUE_BG]),
+        ("GRID",          (0,0),(-1,-1), 0.3, COLOR_DIVIDER),
+        ("ALIGN",         (0,0),(-1,-1), "CENTER"),
+        ("ALIGN",         (1,1),(1,-1),  "LEFT"),
+        ("ALIGN",         (4,1),(4,-1),  "LEFT"),
+        ("TOPPADDING",    (0,0),(-1,-1), 4),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 4),
+        ("LEFTPADDING",   (0,0),(-1,-1), 4),
+    ]))
+    elements.append(tbl)
+    return elements
+
+# ✅ 추가: 안전한 HEX 변환 함수
+def safe_hex(color_obj):
+    raw = color_obj.hexval()
+    if raw.startswith("0x"):
+        return "#" + raw[2:]
+    if raw.startswith("#"):
+        return raw
+    return "#" + raw
+    
 # ── 메인 generate_report (기존 시그니처 완전 유지) ──
 
 def generate_report(
@@ -329,13 +498,15 @@ def generate_report(
     negative_news,
     trading_day,
     output_path="/tmp/stock_report.pdf",
-    # 신규 선택 인자
-    scores=None,       # list[StockScore] | None
-    themes=None,       # list[ThemeIssue] | None
+    scores=None,
+    themes=None,
+    theme_news_map=None,   # 신규
+    hot_kw_map=None,       # 신규
+    tp_list=None,       # 신규: 목표주가 변동
 ):
     has_font = register_fonts()
     styles   = get_styles(has_font)
-
+    logger.info("generate_report has_font=%s", has_font)
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
         topMargin=15*mm, bottomMargin=15*mm,
@@ -440,9 +611,29 @@ def generate_report(
             COLOR_GRAY, styles
         ))
         story.append(Spacer(1,4))
-        for el in build_theme_section(themes, styles):
+        for el in build_theme_section(themes, styles, theme_news_map):
             story.append(el)
-
+        story.append(Spacer(1,14))
+    # ══ SECTION 6: 핫 키워드 ═══════════════════
+    if hot_kw_map:
+        story.append(section_header(
+            "📊  SECTION 6  |  핫 키워드 TOP 8",
+            COLOR_PRIMARY, styles
+        ))
+        story.append(Spacer(1,4))
+        for el in build_hot_keywords_section(hot_kw_map, styles):
+            story.append(el)
+        story.append(Spacer(1,14))
+    # ══ SECTION 7: 목표주가 변동 ═══════════════
+    if tp_list:
+        story.append(section_header(
+            "✨  SECTION 7  |  증권사 목표주가 변동",
+            COLOR_GOLD, styles
+        ))
+        story.append(Spacer(1,4))
+        for el in build_target_price_section(tp_list, styles):
+            story.append(el)
+        story.append(Spacer(1,14))
     # ── 푸터 ─────────────────────────────────────
     story.append(Spacer(1,16))
     story.append(HRFlowable(width="100%", thickness=0.5, color=COLOR_DIVIDER))
