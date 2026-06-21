@@ -139,21 +139,23 @@ def indicator_text(r: dict) -> str:
 def build_stock_section(stock_results, styles):
     elements = []
     if not stock_results:
-        elements.append(Paragraph("조건을 만족하는 종목이 없습니다.", styles["body"]))
+        elements.append(Paragraph("오늘 눌림목 신호가 없습니다.", styles["body"]))
         return elements
     f  = "NanumGothic"     if "NanumGothic"    in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica"
     fb = "NanumGothicBold" if "NanumGothicBold" in [x[0] for x in pdfmetrics.getRegisteredFontNames()] else "Helvetica-Bold"
-    header = ["종목명","코드","현재가","등락률","거래량비율","200일선","RSI","다이버전스","MACD"]
-    col_w  = [30*mm,16*mm,20*mm,16*mm,20*mm,18*mm,14*mm,22*mm,18*mm]
+    header = ["종목명","코드","테마","현재가","등락률","고점대비","RSI","다이버전스","MACD"]
+    col_w  = [26*mm,16*mm,20*mm,20*mm,16*mm,16*mm,12*mm,20*mm,18*mm]
     table_data = [header]
     for r in stock_results:
         div = r.get("divergence","없음")
         div_label = "🔺상승" if div=="상승" else ("🔻하락" if div=="하락" else "—")
         gc_label  = "GC✅" if r.get("golden_cross") else ("H+✅" if r.get("hist_positive") else "—")
         table_data.append([
-            r["name"], r["code"], f"{r['close']:,}",
-            f"{r['change_pct']:+.1f}%", f"{r['volume_ratio']:.1f}배",
-            f"+{r['ma200_gap']:.1f}%", f"{r.get('rsi','-')}",
+            r["name"], r["code"], r.get("theme","-"),
+            f"{r['close']:,}",
+            f"{r['change_pct']:+.1f}%",
+            f"{r['drop_from_high']:.1f}%",
+            f"{r.get('rsi','-')}",
             div_label, gc_label,
         ])
     tbl = Table(table_data, colWidths=col_w, repeatRows=1)
@@ -170,7 +172,6 @@ def build_stock_section(stock_results, styles):
     ]))
     elements.append(tbl)
     return elements
-
 
 def build_news_block(news_results, is_positive, styles):
     elements = []
@@ -556,10 +557,12 @@ def generate_report(
     story.append(Spacer(1,14))
 
     # ══ SECTION 1: 기술적 스캔 ═══════════════════
-    story.append(section_header("📊  SECTION 1  |  기술적 스캔 결과", COLOR_PRIMARY, styles))
+#     story.append(section_header("📊  SECTION 1  |  기술적 스캔 결과", COLOR_PRIMARY, styles))
+    story.append(section_header("📊  SECTION 1  |  AI밸류체인 눌림목 포착", COLOR_PRIMARY, styles))
     story.append(Spacer(1,4))
     story.append(Paragraph(
-        "필터 조건: ① 거래량 2배↑  ② 전일대비 2%↑  ③ 200일선 +3% (5일연속)  ④ 윗꼬리<몸통&아랫꼬리  |  RSI·MACD는 참고용",
+#         "필터 조건: ① 거래량 2배↑  ② 전일대비 2%↑  ③ 200일선 +3% (5일연속)  ④ 윗꼬리<몸통&아랫꼬리  |  RSI·MACD는 참고용",
+        "필터 조건: AI밸류체인 ① 최근20일 +15%↑ 선행상승  ② 고점대비 -5~-15% 조정  ③ 20일선 지지  ④ 60일선 위  ⑤ 반등신호",
         styles["indicator"]
     ))
     story.append(Spacer(1,4))
@@ -570,22 +573,22 @@ def generate_report(
     # ══ SECTION 2: 뉴스 이슈 ═════════════════════
     story.append(section_header("📰  SECTION 2  |  뉴스 이슈", COLOR_GRAY, styles))
     story.append(Spacer(1,4))
-    story.append(Paragraph("🟢 긊정 이슈", styles["body"]))
+    story.append(Paragraph("🟢 긍정적 이슈", styles["body"]))
     story.append(Spacer(1,3))
     for el in build_news_block(positive_news, True, styles):
         story.append(el)
     story.append(Spacer(1,8))
-    story.append(Paragraph("🔴 부정 이슈", styles["body"]))
+    story.append(Paragraph("🔴 부정적 이슈", styles["body"]))
     story.append(Spacer(1,3))
     for el in build_news_block(negative_news, False, styles):
         story.append(el)
     story.append(Spacer(1,14))
 
     # ══ SECTION 3: 오늘의 종목 ═══════════════════
-    story.append(section_header("⭐  SECTION 3  |  오늘의 종목  (기술적 조건 ∩ 긍정뉴스, 부정뉴스 제외)", COLOR_GOLD, styles))
-    story.append(Spacer(1,4))
-    for el in build_top_picks(stock_results, positive_news, negative_news, styles):
-        story.append(el)
+#     story.append(section_header("⭐  SECTION 3  |  오늘의 종목  (기술적 조건 ∩ 긍정뉴스, 부정뉴스 제외)", COLOR_GOLD, styles))
+#     story.append(Spacer(1,4))
+#     for el in build_top_picks(stock_results, positive_news, negative_news, styles):
+#         story.append(el)
 
     # ══ SECTION 4: 종목 점수 랭킹 (선택) ══════════
     if scores:
