@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import FinanceDataReader as fdr
+import watchlist
 
 from scorer import StockScore, score_from_scan, rank_scores
 from supply_scanner import fetch_investor_data
@@ -157,31 +158,55 @@ class StockScanner:
     # ── 조건 검사 (기존 로직 완전 유지) ─────────
     def _check_conditions(self, code, name, end_date):
         try:
-            df = self._get_ohlcv(code, end_date, days=300)
-            if df is None or len(df) < 202: return None
+            df = self._get_ohlcv(code, end_date, days=90)
+            if df is None or len(df) < 70:
+                return None
 
-            today = df.iloc[-1]; yesterday = df.iloc[-2]
-            if yesterday["거래량"] == 0: return None
-            volume_ratio = today["거래량"] / yesterday["거래량"]
-            if volume_ratio < 2.0: return None
+            df = df.reset_index(drop=True) if df.index.name else df
+            idx = len(df) - 1   # 오늘(마지막 봉)
 
-            if yesterday["종가"] == 0: return None
-            change_pct = (today["종가"] - yesterday["종가"]) / yesterday["종가"] * 100
-            if change_pct < 2.0: return None
+            today     = df.iloc[idx]
+            yesterday = df.iloc[idx - 1]
+            close = today["종가"]
 
-            if len(df) < 205: return None
-            above_count = 0; ma200_gap = 0.0
-            for i in range(1, 6):
-                idx = len(df) - i
-                if idx < 200: return None
-                ma200 = df["종가"].iloc[idx - 200:idx].mean()
-                gap   = (df["종가"].iloc[idx] - ma200) / ma200 * 100
-                if gap >= 3.0: above_count += 1
-                if i == 1: ma200_gap = gap
-            if above_count < 5: return None
+            # 등락률 (전일 종가 대비)
+            if yesterday["종가"] == 0:
+                return None
+            change_pct = (close - yesterday["종가"]) / yesterday["종가"] * 100
 
+            # ── 눌림목 필터 ──────────────────────
+            # 1. 선행 상승: 최근 20일 내 +15%
+            window = df.iloc[idx - 20:idx + 1]
+            win_low  = window["종가"].min()
+            win_high = window["고가"].max()
+            if win_low <= 0:
+                return None
+            if (win_high - win_low) / win_low * 100 < 15:
+                return None
+
+            # 2. 조정: 고점 대비 -5 ~ -15%
+            drop_pct = (close - win_high) / win_high * 100
+            if not (-15 <= drop_pct <= -5):
+                return None
+
+            # 3. 20일선 지지 ±3%
+            ma20 = df["종가"].iloc[idx - 20:idx].mean()
+            if ma20 <= 0:
+                return None
+            if abs((close - ma20) / ma20 * 100) > 3:
+                return None
+
+            # 4. 60일선 위
+            ma60 = df["종가"].iloc[idx - 60:idx].mean()
+            if ma60 <= 0 or close < ma60:
+                return None
+
+            # 5. 반등: 양봉 또는 아랫꼬리
             upper_tail, body, lower_tail = self._candle_parts(today)
-            if not (upper_tail < body and upper_tail < lower_tail): return None
+            is_bullish    = close > today["시가"]
+            has_long_tail = lower_tail > body and lower_tail > upper_tail
+            if not (is_bullish or has_long_tail):
+                return None
 
             rsi_series  = self._calc_rsi(df["종가"])
             current_rsi = round(float(rsi_series.iloc[-1]), 1)
@@ -194,10 +219,11 @@ class StockScanner:
 
             return {
                 "code": code, "name": name,
-                "close": int(today["종가"]),
-                "change_pct": change_pct, "volume_ratio": volume_ratio,
-                "ma200_gap": ma200_gap,
-                "upper_tail": int(upper_tail), "body": int(body), "lower_tail": int(lower_tail),
+                "close": int(close),
+                "change_pct": change_pct,        # 전일 대비 등락률
+                "drop_from_high": drop_pct,      # 고점 대비 조정폭
+                "ma20_gap": (close - ma20) / ma20 * 100,
+                "theme": watchlist.code_to_theme().get(code, "-"),
                 "rsi": current_rsi, "rsi_status": rsi_status, "divergence": divergence,
                 "golden_cross": golden_cross, "hist_positive": hist_positive,
                 "_df": df,
@@ -211,14 +237,12 @@ class StockScanner:
         if self._is_maintenance_time():
             logger.warning("KRX 서버 점검 시간 (00:00~06:00) — 스캔 불가")
             return []
-        trading_day = self._latest_trading_day()
-        tickers     = self._get_all_tickers(trading_day)
-        logger.info("총 %d개 종목 스캔 시작 (기준일: %s)", len(tickers), trading_day)
+            trading_day = self._latest_trading_day()
+            tickers     = list(watchlist.code_to_name().items())
+            logger.info("watchlist %d개 종목 스캔 시작 (기준일: %s)", len(tickers), trading_day)
 
-        results = []
-        for i, (code, name) in enumerate(tickers):
-            if i % 100 == 0:
-                logger.info("... %d / %d", i, len(tickers))
+            results = []
+            for code, name in tickers:
             result = self._check_conditions(code, name, trading_day)
             if result:
                 result.pop("_df", None)

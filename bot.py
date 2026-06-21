@@ -11,7 +11,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from scanner import StockScanner
-from news_scanner import NewsScanner, fetch_all_news, build_stock_sentiment_map
+# from news_scanner import NewsScanner, fetch_all_news, build_stock_sentiment_map
+from news_scanner import NewsScanner, fetch_all_news
 from report_generator import generate_report
 from sector_theme import classify_news_to_themes, count_hot_keywords
 from config import TELEGRAM_TOKEN, CHAT_ID, WEEKDAY_SCAN_TIMES, WEEKEND_SCAN_TIMES
@@ -59,88 +60,73 @@ async def run_full_scan(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
     try:
         trading_day = scanner._latest_trading_day()
 
-        # 1. 기존 주식 스캔
+        # 1. 눌림목 스캔 (watchlist 50종목)
         stock_results = scanner.scan()
-        logger.info("주식 스캔 완료: %d종목", len(stock_results))
+        logger.info("눌림목 스캔 완료: %d종목", len(stock_results))
 
-        # 2. 기존 뉴스 스캔
+        # 2. 뉴스 스캔
         positive_news, negative_news = news_scanner.scan()
         logger.info("뉴스 스캔 완료: 긍정 %d, 부정 %d", len(positive_news), len(negative_news))
 
-        # 3. 테마 분류
+        # 3. 테마 분류 (뉴스 리포트용)
         news_items = fetch_all_news()
         themes = classify_news_to_themes(news_items)
         logger.info("테마 감지: %d개", len(themes))
 
-        # 4. 점수 스캔
-        scores = None
-        if stock_results:
-            sentiment_map = build_stock_sentiment_map(news_items)
-            scores = scanner.scan_with_score(
-                themes=themes,
-                news_sentiment_map=sentiment_map,
-            )
-            logger.info("점수 계산 완료: %d종목", len(scores) if scores else 0)
-
-        # 5. PDF 생성
+        # 4. PDF 생성 (점수 없이)
         pdf_path = generate_report(
             stock_results=stock_results,
             positive_news=positive_news,
             negative_news=negative_news,
             trading_day=trading_day,
-            scores=scores,
+            scores=None,
             themes=themes,
         )
 
-        # 6. 요약 메시지
+        # 5. 요약 메시지
         d   = datetime.strptime(trading_day, "%Y%m%d")
         now = datetime.now()
-        trading_day_date = d.date()
-        is_today = trading_day_date == now.date()
+        is_today = d.date() == now.date()
 
         if is_today:
             day_label = f"📅 {d.strftime('%Y-%m-%d')} (오늘)"
         elif now.weekday() >= 5:
-            day_label = f"📅 {d.strftime('%Y-%m-%d')} 기준 _(오늘은 주말 휴장)_"
+            day_label = f"📅 {d.strftime('%Y-%m-%d')} 기준 _(주말 휴장)_"
         else:
-            day_label = f"📅 {d.strftime('%Y-%m-%d')} 기준 _(오늘은 공휴일 휴장)_"
+            day_label = f"📅 {d.strftime('%Y-%m-%d')} 기준 _(공휴일 휴장)_"
 
-        theme_lines = ""
-        if themes:
-            theme_lines = "\n\n🔥 *오늘의 테마*\n" + "\n".join(
-                f"  {t.direction} {t.theme_name} ({t.news_count}건)" for t in themes[:3]
+        # 눌림목 종목 리스트 (등락률·테마 포함)
+        if stock_results:
+            pick_lines = "\n".join(
+                f"  {r['name']} ({r['theme']}) "
+                f"{r['change_pct']:+.1f}% / 고점-{abs(r['drop_from_high']):.0f}%"
+                for r in stock_results
             )
-
-        score_lines = ""
-        if scores:
-            score_lines = "\n\n🎯 *점수 TOP 3*\n" + "\n".join(
-                f"  {s.name} *{s.total}점* {s.grade().strip()}" for s in scores[:3]
-            )
+        else:
+            pick_lines = "  오늘 눌림목 신호 없음"
 
         summary = (
-            f"📋 *KRX 스캔 리포트* — {now.strftime('%H:%M')}\n"
+            f"📋 *AI밸류체인 눌림목 스캔* — {now.strftime('%H:%M')}\n"
             f"{day_label}\n\n"
-            f"📊 주식 조건 만족: *{len(stock_results)}종목*\n"
-            f"🟢 긍정 뉴스 이슈: *{len(positive_news)}종목*\n"
-            f"🔴 부정 뉴스 이슈: *{len(negative_news)}종목*"
-            f"{theme_lines}"
-            f"{score_lines}\n\n"
-            f"아래 PDF 파일을 확인하세요 👇"
+            f"🎯 *눌림목 포착: {len(stock_results)}종목*\n"
+            f"{pick_lines}\n\n"
+            f"🟢 긍정 뉴스 {len(positive_news)} / 🔴 부정 {len(negative_news)}\n\n"
+            f"아래 PDF 확인 👇"
         )
         await _bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="Markdown")
 
-        # 7. PDF 전송
-        filename = f"KRX_리포트_{now.strftime('%Y%m%d_%H%M')}.pdf"
+        # 6. PDF 전송
+        filename = f"눌림목_리포트_{now.strftime('%Y%m%d_%H%M')}.pdf"
         with open(pdf_path, "rb") as f:
             await _bot.send_document(
                 chat_id=CHAT_ID, document=f, filename=filename,
-                caption=f"📄 KRX 스캔 리포트 ({now.strftime('%Y-%m-%d %H:%M')})"
+                caption=f"📄 AI밸류체인 눌림목 리포트 ({now.strftime('%Y-%m-%d %H:%M')})"
             )
         logger.info("PDF 전송 완료")
 
     except Exception as e:
         logger.error("스캔 오류: %s", str(e))
-        await _bot.send_message(chat_id=CHAT_ID, text="⚠️ 스캔 중 오류 발생: " + str(e))
+        await _bot.send_message(chat_id=CHAT_ID, text="⚠️ 스캔 중 오류: " + str(e))
 
 
 # ────────────────────────────────────────────────

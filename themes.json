@@ -1,0 +1,14 @@
+[
+  {
+    "theme_name": "AI/데이터센터 투자 확대",
+    "direction": "▲상승",
+    "keywords": ["AI", "인공지능", "엔비디아", "HBM", "데이터센터"],
+    "related_sectors": ["AI/IT/게임", "반도체/소부장", "전력/전기장비"]
+  },
+  {
+    "theme_name": "반도체 수출 호조",
+    "direction": "▲상승",
+    "keywords": ["반도체", "파운드리", "메모리", "D램", "HBM"],
+    "related_sectors": ["반도체/소부장"]
+  }
+]
