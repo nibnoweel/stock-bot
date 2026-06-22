@@ -233,25 +233,25 @@ class StockScanner:
             return None
 
     # ── scan() — watchlist 눌림목 스캔 ────────────
-        def scan(self) -> list:
-            if self._is_maintenance_time():
-                logger.warning("KRX 서버 점검 시간 (00:00~06:00) — 스캔 불가")
-                return []
+    def scan(self) -> list:
+        if self._is_maintenance_time():
+            logger.warning("KRX 서버 점검 시간 (00:00~06:00) — 스캔 불가")
+            return []
 
-            trading_day = self._latest_trading_day()
-            tickers     = list(watchlist.code_to_name().items())
-            logger.info("watchlist %d개 종목 스캔 시작 (기준일: %s)", len(tickers), trading_day)
+        trading_day = self._latest_trading_day()
+        tickers     = list(watchlist.code_to_name().items())
+        logger.info("watchlist %d개 종목 스캔 시작 (기준일: %s)", len(tickers), trading_day)
 
-            results = []
-            for code, name in tickers:
-                result = self._check_conditions(code, name, trading_day)
-                if result:
-                    result.pop("_df", None)
-                    results.append(result)
-                    logger.info("눌림목 포착: %s (%s)", name, code)
+        results = []
+        for code, name in tickers:
+            result = self._check_conditions(code, name, trading_day)
+            if result:
+                result.pop("_df", None)
+                results.append(result)
+                logger.info("눌림목 포착: %s (%s)", name, code)
 
-            logger.info("스캔 완료 - %d개 종목 발견", len(results))
-            return results
+        logger.info("스캔 완료 - %d개 종목 발견", len(results))
+        return results
 
     # ── 신규 scan_with_score() ───────────────────
     def scan_with_score(
