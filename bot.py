@@ -3,7 +3,8 @@ bot.py (업그레이드)
 기존 구조 완전 유지
 수정: scheduler를 app.post_init으로 이동 (no running event loop 해결)
 """
-
+import watchlist
+from report_html import generate_html_report
 import logging
 from datetime import datetime
 from telegram import Bot
@@ -61,66 +62,49 @@ async def run_full_scan(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
         trading_day = scanner._latest_trading_day()
 
         # 1. 눌림목 스캔 (watchlist 50종목)
-        stock_results = scanner.scan()
-        logger.info("눌림목 스캔 완료: %d종목", len(stock_results))
+        picks = scanner.scan()
+        logger.info("눌림목 포착: %d종목", len(picks))
 
-        # 2. 뉴스 스캔
+        # 2. 뉴스 스캔 후 watchlist 종목만 필터링
         positive_news, negative_news = news_scanner.scan()
-        logger.info("뉴스 스캔 완료: 긍정 %d, 부정 %d", len(positive_news), len(negative_news))
+        wl_codes = set(watchlist.all_codes())
+        news_pos = [n for n in positive_news if n.get("code") in wl_codes]
+        news_neg = [n for n in negative_news if n.get("code") in wl_codes]
+        logger.info("watchlist 뉴스 — 긍정 %d, 부정 %d", len(news_pos), len(news_neg))
 
-        # 3. 테마 분류 (뉴스 리포트용)
-        news_items = fetch_all_news()
-        themes = classify_news_to_themes(news_items)
-        logger.info("테마 감지: %d개", len(themes))
-
-        # 4. PDF 생성 (점수 없이)
-        pdf_path = generate_report(
-            stock_results=stock_results,
-            positive_news=positive_news,
-            negative_news=negative_news,
+        # 3. 토스 스타일 HTML 리포트 생성
+        pdf_path = generate_html_report(
+            picks=picks,
+            news_pos=news_pos,
+            news_neg=news_neg,
             trading_day=trading_day,
-            scores=None,
-            themes=themes,
         )
 
-        # 5. 요약 메시지
-        d   = datetime.strptime(trading_day, "%Y%m%d")
+        # 4. 요약 메시지
         now = datetime.now()
-        is_today = d.date() == now.date()
-
-        if is_today:
-            day_label = f"📅 {d.strftime('%Y-%m-%d')} (오늘)"
-        elif now.weekday() >= 5:
-            day_label = f"📅 {d.strftime('%Y-%m-%d')} 기준 _(주말 휴장)_"
-        else:
-            day_label = f"📅 {d.strftime('%Y-%m-%d')} 기준 _(공휴일 휴장)_"
-
-        # 눌림목 종목 리스트 (등락률·테마 포함)
-        if stock_results:
+        if picks:
             pick_lines = "\n".join(
                 f"  {r['name']} ({r['theme']}) "
                 f"{r['change_pct']:+.1f}% / 고점-{abs(r['drop_from_high']):.0f}%"
-                for r in stock_results
+                for r in picks
             )
         else:
             pick_lines = "  오늘 눌림목 신호 없음"
 
         summary = (
-            f"📋 *AI밸류체인 눌림목 스캔* — {now.strftime('%H:%M')}\n"
-            f"{day_label}\n\n"
-            f"🎯 *눌림목 포착: {len(stock_results)}종목*\n"
+            f"📋 *AI밸류체인 눌림목* — {now.strftime('%H:%M')}\n\n"
+            f"🎯 *포착: {len(picks)}종목*\n"
             f"{pick_lines}\n\n"
-            f"🟢 긍정 뉴스 {len(positive_news)} / 🔴 부정 {len(negative_news)}\n\n"
-            f"아래 PDF 확인 👇"
+            f"🟢 긍정뉴스 {len(news_pos)} / 🔴 부정 {len(news_neg)}"
         )
         await _bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="Markdown")
 
-        # 6. PDF 전송
-        filename = f"눌림목_리포트_{now.strftime('%Y%m%d_%H%M')}.pdf"
+        # 5. PDF 전송
+        filename = f"눌림목_{now.strftime('%Y%m%d_%H%M')}.pdf"
         with open(pdf_path, "rb") as f:
             await _bot.send_document(
                 chat_id=CHAT_ID, document=f, filename=filename,
-                caption=f"📄 AI밸류체인 눌림목 리포트 ({now.strftime('%Y-%m-%d %H:%M')})"
+                caption=f"📄 AI밸류체인 눌림목 리포트"
             )
         logger.info("PDF 전송 완료")
 
