@@ -31,7 +31,6 @@ body {
     background: #F2F4F6;
     color: #191F28;
     padding: 32px 28px;
-    -weasy-font-feature-settings: "tnum";
 }
 .header {
     margin-bottom: 24px;
