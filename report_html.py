@@ -104,6 +104,21 @@ body {
     padding: 4px 10px;
     border-radius: 8px;
 }
+.zone-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 4px 10px;
+    border-radius: 8px;
+    margin-left: 6px;
+}
+.zone-진입 {
+    background: #E8F3FF;
+    color: #3182F6;
+}
+.zone-도달 {
+    background: #E5F9F0;
+    color: #00C896;
+}
 .pick-body {
     display: flex;
 }
@@ -189,6 +204,7 @@ def generate_html_report(picks, news_pos, news_neg, trading_day,
                         <span class="pick-code">{r['code']}</span>
                     </div>
                     <span class="theme-badge" style="background:{color}">{r.get('theme','-')}</span>
+                    <span class="zone-badge zone-{r.get('zone','진입')}">{r.get('zone','-')}</span>
                 </div>
                 <div class="pick-body">
                     <div class="pick-metric">

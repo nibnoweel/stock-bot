@@ -189,12 +189,14 @@ class StockScanner:
             if not (-15 <= drop_pct <= -5):
                 return None
 
-            # 3. 20일선 지지 ±3%
+            # 3. 20일선 대비 구간 (진입 +3~-2% / 도달 -2~-7%, 이탈 -7%↓ 제외)
             ma20 = df["종가"].iloc[idx - 20:idx].mean()
             if ma20 <= 0:
                 return None
-            if abs((close - ma20) / ma20 * 100) > 3:
-                return None
+            gap20 = (close - ma20) / ma20 * 100
+            if gap20 > 3 or gap20 < -7:
+                return None              # 미조정 or 이탈 → 제외
+            pullback_zone = "진입" if gap20 >= -2 else "도달"
 
             # 4. 60일선 위
             ma60 = df["종가"].iloc[idx - 60:idx].mean()
@@ -222,7 +224,8 @@ class StockScanner:
                 "close": int(close),
                 "change_pct": change_pct,        # 전일 대비 등락률
                 "drop_from_high": drop_pct,      # 고점 대비 조정폭
-                "ma20_gap": (close - ma20) / ma20 * 100,
+                "ma20_gap": gap20,
+                "zone": pullback_zone,           # 진입 / 도달
                 "theme": watchlist.code_to_theme().get(code, "-"),
                 "rsi": current_rsi, "rsi_status": rsi_status, "divergence": divergence,
                 "golden_cross": golden_cross, "hist_positive": hist_positive,
