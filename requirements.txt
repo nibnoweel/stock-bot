@@ -8,4 +8,6 @@ reportlab==4.2.0
 requests>=2.31.0
 openai>=1.30.0
 beautifulsoup4>=4.12.0
-weasyprint==60.2
+weasyprint==61.2
+pydyf==0.10.0
+fonttools==4.51.0

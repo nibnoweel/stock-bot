@@ -47,8 +47,10 @@ body {
 }
 .summary {
     display: flex;
-    gap: 12px;
     margin-bottom: 28px;
+}
+.summary-card + .summary-card {
+    margin-left: 12px;
 }
 .summary-card {
     flex: 1;
@@ -104,7 +106,9 @@ body {
 }
 .pick-body {
     display: flex;
-    gap: 24px;
+}
+.pick-metric + .pick-metric {
+    margin-left: 24px;
 }
 .pick-metric .v {
     font-size: 18px;
@@ -135,8 +139,10 @@ body {
 .news-head {
     display: flex;
     align-items: center;
-    gap: 8px;
     margin-bottom: 8px;
+}
+.news-head > * + * {
+    margin-left: 8px;
 }
 .news-name { font-size: 15px; font-weight: 700; }
 .news-kw {
